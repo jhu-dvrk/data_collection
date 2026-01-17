@@ -19,7 +19,8 @@ from rclpy.qos import QoSProfile, DurabilityPolicy
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QGridLayout, QLabel, QCheckBox,
-                             QLineEdit, QFileDialog, QSizePolicy, QOpenGLWidget, QMessageBox)
+                             QLineEdit, QFileDialog, QSizePolicy, QOpenGLWidget, QMessageBox,
+                             QListWidget)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QRect
 from PyQt5.QtGui import QImage, QPixmap, QPainter
 
@@ -36,7 +37,13 @@ class VideoThread(QThread):
         self.is_recording = False
         self.rec_requested = False
         self.rec_base_dir = "."
+        self.step_name = None
         self.writer = None
+        
+        # Track last recording metadata
+        self.last_video_name = None
+        self.last_json_path = None
+        self.last_video_duration = 0.0
         
         # UI state
         self.preview_enabled = True
@@ -151,19 +158,24 @@ class VideoThread(QThread):
                 print(f"Error writing frame for video {self.name}: {e}")
 
     def _start_writer(self):
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Use YYMMDD_HHMMSS format for the file timestamp
+        timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
         
         self.rec_start_epoch = None
         self.rec_start_gst = None
         # Sanitize name for filename and pipeline use
         safe_name = self.name.replace(" ", "_")
 
-        filename = f"{safe_name}_{timestamp}.mp4"
+        suffix = f"_{self.step_name}" if self.step_name else ""
+        # Format: camera_name_YYMMDD_HHMMSS_stepname
+        filename = f"{safe_name}_{timestamp}{suffix}.mp4"
         filepath = os.path.join(self.rec_base_dir, filename)
+        self.last_video_name = filename
         
         # Prepare JSON timestamps file path
-        json_filename = f"{safe_name}_{timestamp}.json"
+        json_filename = f"{safe_name}_{timestamp}{suffix}.json"
         self.json_filepath = os.path.join(self.rec_base_dir, json_filename)
+        self.last_json_path = self.json_filepath
         self.frame_timestamps = []
         
         encoding = self.pipeline_config.get('encoding', {})
@@ -208,6 +220,7 @@ class VideoThread(QThread):
             if len(self.frame_timestamps) > 1:
                 duration = self.frame_timestamps[-1] - self.frame_timestamps[0]
             print(f"Stop recording video {self.name} (duration: {duration:.2f}s)")
+            self.last_video_duration = duration
             self.writer.release()
             self.writer = None
             
@@ -219,7 +232,7 @@ class VideoThread(QThread):
                         "name": self.name,
                         "fps": self.fps,
                         "video_file": os.path.basename(self.json_filepath).replace(".json", ".mp4"),
-                        "timestamps_ms": self.frame_timestamps
+                        "timestamps_ms": [ts * 1000.0 for ts in self.frame_timestamps]
                     }
                     with open(self.json_filepath, 'w') as f:
                         json.dump(data, f, indent=2)
@@ -235,9 +248,10 @@ class VideoThread(QThread):
         self._run_flag = False
         self.wait()
 
-    def set_recording(self, recording, base_dir):
+    def set_recording(self, recording, base_dir, step_name=None):
         self.rec_base_dir = base_dir
         self.rec_requested = recording
+        self.step_name = step_name
 
 
 class VideoPopupWindow(QOpenGLWidget):
@@ -361,6 +375,10 @@ class RecorderWindow(QMainWindow):
         self.video_widgets = []
         self.is_recording = False
         self.bag_process = None
+        self.bag_start_time = None
+        self.last_bag_name = None
+        self.last_bag_duration = 0.0
+        self.last_bag_message_count = 0
 
         # ROS2 Setup
         self.ros_node = None
@@ -396,9 +414,27 @@ class RecorderWindow(QMainWindow):
         
         layout.addLayout(dir_layout)
         
+        # Middle Part: Videos on left, Steps on right
+        content_layout = QHBoxLayout()
+
         # Grid for videos
         self.grid_layout = QGridLayout()
-        layout.addLayout(self.grid_layout, 1) # Give 100% of extra vertical space to the video grid
+        content_layout.addLayout(self.grid_layout, 4) # Give more weight to videos
+        
+        # Steps list
+        self.list_steps = QListWidget()
+        steps = self.config.get("steps", [])
+        self.list_steps.addItems(steps)
+        if steps:
+            steps_container = QWidget()
+            steps_layout = QVBoxLayout(steps_container)
+            steps_layout.addWidget(QLabel("Steps:"))
+            self.list_steps.setCurrentRow(0)
+            self.list_steps.setFixedWidth(150)
+            steps_layout.addWidget(self.list_steps)
+            content_layout.addWidget(steps_container)
+        
+        layout.addLayout(content_layout, 1)
         
         # Bottom bar for Controls and Quit
         bottom_layout = QHBoxLayout()
@@ -520,7 +556,8 @@ class RecorderWindow(QMainWindow):
         merged_config = {
             "data_directory": "data",
             "pipelines": [],
-            "ros_topics": []
+            "ros_topics": [],
+            "steps": []
         }
         
         # Helper to find pipeline by name in list
@@ -553,6 +590,14 @@ class RecorderWindow(QMainWindow):
                             if t not in current_topics:
                                 merged_config["ros_topics"].append(t)
                                 current_topics.add(t)
+
+                    # Merge steps (deduplicated)
+                    if "steps" in cfg and isinstance(cfg["steps"], list):
+                        current_steps = set(merged_config["steps"])
+                        for s in cfg["steps"]:
+                            if s not in current_steps:
+                                merged_config["steps"].append(s)
+                                current_steps.add(s)
 
                     # Append pipelines, renaming duplicates
                     if "pipelines" in cfg and isinstance(cfg["pipelines"], list):
@@ -651,6 +696,21 @@ class RecorderWindow(QMainWindow):
             info = rosbag2_py.Info()
             metadata = info.read_metadata(bag_path, "")
             
+            # Get duration from metadata
+            d = metadata.duration
+            if hasattr(d, 'nanoseconds'):
+                self.last_bag_duration = d.nanoseconds / 1e9
+            elif hasattr(d, 'total_seconds'):
+                self.last_bag_duration = d.total_seconds()
+            else:
+                try:
+                    # Some versions return duration in nanoseconds as int
+                    self.last_bag_duration = float(d) / 1e9
+                except (ValueError, TypeError):
+                    self.last_bag_duration = 0.0
+            
+            self.last_bag_message_count = getattr(metadata, 'message_count', 0)
+
             topic_counts = {}
             for topic_info in metadata.topics_with_message_count:
                 topic_counts[topic_info.topic_metadata.name] = topic_info.message_count
@@ -681,17 +741,39 @@ class RecorderWindow(QMainWindow):
             
         try:
             videos = []
-            for filename in os.listdir(self.current_step_dir):
-                if filename.endswith(".mp4"):
-                    videos.append(os.path.splitext(filename)[0])
+            for th, _ in self.threads:
+                if th.last_video_name:
+                    v_duration = 0.0
+                    # Compute duration from the sidecar JSON file
+                    if th.last_json_path and os.path.exists(th.last_json_path):
+                        try:
+                            with open(th.last_json_path, 'r') as f:
+                                v_data = json.load(f)
+                                ts_ms = v_data.get("timestamps_ms", [])
+                                if len(ts_ms) > 1:
+                                    v_duration = (ts_ms[-1] - ts_ms[0]) / 1000.0
+                                else:
+                                    v_duration = 0.0
+                        except Exception as e:
+                            print(f"Error computing duration for {th.last_video_name}: {e}")
+                            v_duration = th.last_video_duration # Fallback
+                    
+                    videos.append({
+                        "file": th.last_video_name,
+                        "duration": v_duration
+                    })
             
-            rosbag_name = None
-            if hasattr(self, 'last_bag_path') and self.last_bag_path:
-                rosbag_name = os.path.basename(self.last_bag_path)
+            rosbag_data = None
+            if self.last_bag_name:
+                rosbag_data = {
+                    "name": self.last_bag_name,
+                    "duration": self.last_bag_duration,
+                    "message_count": self.last_bag_message_count
+                }
             
             index_data = {
-                "videos": sorted(videos),
-                "rosbag": rosbag_name
+                "videos": videos,
+                "rosbag": rosbag_data
             }
             
             index_path = os.path.join(self.current_step_dir, "index.json")
@@ -705,10 +787,20 @@ class RecorderWindow(QMainWindow):
         if not self.is_recording:
             # Start
             self.btn_browse.setEnabled(False)
+            self.list_steps.setEnabled(False)
             
             # Create a subdirectory based on the date and time
             step_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            step_dir = os.path.join(self.base_dir, step_timestamp)
+            
+            # Append step name if available
+            dir_name = step_timestamp
+            step_name = None
+            current_item = self.list_steps.currentItem()
+            if current_item:
+                step_name = current_item.text().replace(" ", "_")
+                dir_name = f"{step_timestamp}_{step_name}"
+                
+            step_dir = os.path.join(self.base_dir, dir_name)
             self.current_step_dir = step_dir
             try:
                 os.makedirs(step_dir, exist_ok=True)
@@ -718,21 +810,19 @@ class RecorderWindow(QMainWindow):
                 # Fallback to base_dir if step_dir creation fails
                 step_dir = self.base_dir
 
-            for th, chk in self.threads:
-                # Disable checkbox
-                chk.setEnabled(False)
-                # Update record config based on checkbox
-                th.pipeline_config['record'] = chk.isChecked()
-                th.set_recording(True, step_dir)
-            
-            # Start ROS Bag
+            # Start ROS Bag first (can be slow to initialize)
             ros_topics = self.config.get("ros_topics", [])
             self.last_bag_path = None
+            self.last_bag_name = None
+            self.last_bag_duration = 0.0
+            self.last_bag_message_count = 0
             if ros_topics:
                 try:
-                    bag_name = f"rosbag_{step_timestamp}"
+                    bag_name = f"rosbag_{dir_name}"
                     bag_path = os.path.join(step_dir, bag_name)
                     self.last_bag_path = bag_path
+                    self.last_bag_name = bag_name
+                    self.bag_start_time = time.time()
                     
                     # Use --topics to specify the topic list explicitely
                     cmd = ["ros2", "bag", "record", "-o", bag_path, "--topics"] + ros_topics
@@ -741,6 +831,14 @@ class RecorderWindow(QMainWindow):
                     self.bag_process = subprocess.Popen(cmd, stdin=subprocess.DEVNULL) 
                 except Exception as e:
                     print(f"Failed to start rosbag: {e}")
+
+            # Start video recordings
+            for th, chk in self.threads:
+                # Disable checkbox
+                chk.setEnabled(False)
+                # Update record config based on checkbox
+                th.pipeline_config['record'] = chk.isChecked()
+                th.set_recording(True, step_dir, step_name)
 
             self.btn_record.setText("Stop Recording")
             self.btn_record.setStyleSheet("background-color: red; color: white;")
@@ -777,7 +875,14 @@ class RecorderWindow(QMainWindow):
             self.btn_record.setStyleSheet("")
             self.is_recording = False
             self.btn_browse.setEnabled(True)
+            self.list_steps.setEnabled(True)
             
+            # Advance to next step (restart if at end)
+            current_row = self.list_steps.currentRow()
+            if current_row >= 0:
+                next_row = (current_row + 1) % self.list_steps.count()
+                self.list_steps.setCurrentRow(next_row)
+
             # Save index.json for all files in the step directory
             self.save_index()
 

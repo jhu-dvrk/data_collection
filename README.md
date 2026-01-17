@@ -38,6 +38,11 @@ Define your video sources in a JSON file. The configuration format is defined in
     "/PSM1/measured_cv",
     "/PSM1/jaw/measured_js"
   ],
+  "steps": [
+    "calibration",
+    "exercise_1",
+    "exercise_2"
+  ],
   "pipelines": [
     {
       "name": "camera_1",
@@ -71,10 +76,20 @@ Run the script passing one or more configuration files:
 Multiple configuration files can be loaded and merged.  You can collect multiple video streams and multiple ROS topics defined in existing files (e.g. `PSM1.json`).  This allows users to re-use configuration files for each component used for a given experimental setup.
 
 ```bash
-./data_recorder.py -c config1.json -c config2.json
+./data_recorder.py -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
 ```
 
-### 3. Data Post-processing
+### 3. Steps Feature
+
+If the `steps` field is provided in the configuration, a "Steps" list will appear on the right side of the GUI.
+
+*   **File Naming**: When a step is selected, its name is appended to the session directory and all recorded files. The naming convention for video files is `camera_name_YYMMDD_HHMMSS_step.mp4`.
+*   **Auto-Advancement**: After stopping a recording, the application automatically selects the next step in the list.
+*   **Looping**: When the last step is completed, it wraps back to the first step.
+*   **Manual Override**: Users can click any step in the list to select it for the next recording (selection is disabled while recording is in progress).
+*   **Session Metadata**: An `index.json` file is created in each session directory, storing the actual duration for each video (computed from frame timestamps) and the ROS bag (extracted from metadata), as well as the total ROS bag message count.
+
+### 4. Data Post-processing
 
 The `extract_frames.py` script identifies all data in a session directory and:
 1.  Extracts individual frames from all recorded `.mp4` files.
