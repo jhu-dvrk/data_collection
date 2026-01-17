@@ -1,0 +1,83 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Video Recorder Configuration",
+    "type": "object",
+    "properties": {
+        "data_directory": {
+            "type": "string",
+            "description": "Directory where recorded videos will be saved"
+        },
+        "ros_topics": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "List of ROS topics to be recorded in the bag file"
+        },
+        "pipelines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "name",
+                    "stream"
+                ],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the pipeline"
+                    },
+                    "stream": {
+                        "type": "string",
+                        "description": "GStreamer source description string"
+                    },
+                    "record": {
+                        "type": "boolean",
+                        "description": "Whether to record this stream by default",
+                        "default": true
+                    },
+                    "popup": {
+                        "type": "boolean",
+                        "description": "Whether to show a popup window for this stream by default",
+                        "default": false
+                    },
+                    "encoding": {
+                        "type": "object",
+                        "properties": {
+                            "bitrate": {
+                                "type": "integer",
+                                "description": "Bitrate in bits per second (optional)",
+                                "default": 10000
+                            },
+                            "speed_preset": {
+                                "type": "integer",
+                                "description": "x264 speed preset (1-10) (optional). Lower is faster encoding, lower quality.",
+                                "default": 5
+                            },
+                            "key_int_max": {
+                                "type": "integer",
+                                "description": "Maximum keyframe interval (optional)",
+                                "default": 20
+                            },
+                            "frame_rate": {
+                                "type": "integer",
+                                "description": "Target frame rate for recording (optional)"
+                            },
+                            "width": {
+                                "type": "integer",
+                                "description": "Target width for recording (optional)"
+                            },
+                            "height": {
+                                "type": "integer",
+                                "description": "Target height for recording (optional)"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "required": [
+        "pipelines"
+    ]
+}

@@ -1,0 +1,31 @@
+{
+  "data_directory": "data",
+  "pipelines": [
+    {
+      "name": "bars",
+      "stream": "videotestsrc",
+      "record": true,
+      "popup": true
+    },
+    {
+      "name": "ball",
+      "stream": "videotestsrc pattern=ball",
+      "record": false
+    },
+    {
+      "name": "stereo1",
+      "stream": "videotestsrc pattern=ball ! capsfilter caps=video/x-raw,width=320,height=240 ! mix.sink_0 videotestsrc pattern=smpte ! capsfilter caps=video/x-raw,width=320,height=240 ! mix.sink_1 compositor name=mix sink_0::xpos=0 sink_1::xpos=320 ! capsfilter caps=video/x-raw,width=640,height=240",
+      "record": true,
+      "recording_options": {
+        "encoding": {
+          "bitrate": 500000,
+          "speed_preset": 7,
+          "key_int_max": 30,
+          "frame_rate": 15,
+          "width": 320,
+          "height": 120
+        }
+      }
+    }
+  ]
+}

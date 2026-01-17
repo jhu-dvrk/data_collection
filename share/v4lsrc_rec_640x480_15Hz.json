@@ -1,0 +1,16 @@
+{
+    "data_directory": "data",
+    "pipelines": [
+        {
+            "name": "v4l_camera",
+            "stream": "v4l2src device=/dev/video0",
+            "record": true,
+            "tee_gl_view": false,
+            "encoding": {
+                "frame_rate": 15,
+                "width": 640,
+                "height": 480
+            }
+        }
+    ]
+}

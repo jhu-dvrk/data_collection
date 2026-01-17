@@ -1,0 +1,27 @@
+{
+  "data_directory": "data",
+  "pipelines": [
+    {
+      "name": "bars",
+      "stream": "videotestsrc",
+      "record": true,
+      "tee_gl_view": false,
+      "encoding": {
+        "bitrate": 10000,
+        "speed_preset": 2,
+        "key_int_max": 60
+      }
+    },
+    {
+      "name": "ball",
+      "stream": "videotestsrc pattern=ball",
+      "record": false,
+      "tee_gl_view": true,
+      "encoding": {
+        "bitrate": 10000,
+        "speed_preset": 2,
+        "key_int_max": 60
+      }
+    }
+  ]
+}

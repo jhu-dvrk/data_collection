@@ -1,0 +1,11 @@
+{
+  "ros_topics": [ 
+    "/MTML/measured_cp",
+    "/MTML/measured_cv",
+    "/MTML/setpoint_cp",
+    "/MTML/setpoint_cv",
+    "/MTML/gripper/measured_js",
+    "/MTML/gripper/setpoint_js",
+    "/MTML/local/measured_cp",
+    "/MTML/local/measured_cv"]
+}
