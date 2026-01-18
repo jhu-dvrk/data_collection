@@ -1,0 +1,13 @@
+{
+  "ros_topics": [
+    "/console/camera",
+    "/console/camera_quick_tap",
+    "/console/clutch",
+    "/console/clutch_quick_tap",
+    "/console/follow_mode",
+    "/console/head_in",
+    "/console/head_out",
+    "/console/masters_as_mice",
+    "/console/operator_present"
+  ]
+}

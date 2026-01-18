@@ -1,0 +1,12 @@
+{
+  "data_directory": "data",
+  "configuration_files": [
+    "../decklink_stereo_gooviz.json",
+    "console.json",
+    "MTML1.json",
+    "MTMR1.json",
+    "PSM1.json",
+    "PSM2.json",
+    "ECM1.json"
+  ]
+}

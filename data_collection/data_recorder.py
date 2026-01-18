@@ -440,7 +440,7 @@ class RecorderWindow(QMainWindow):
         self.update_timer.timeout.connect(self.update_loop)
         self.update_timer.start(50) # 20Hz
         
-        self.base_dir = self.config.get("data_directory", ".")
+        self.base_dir = self.config.get("data_directory", "data")
         if not os.path.exists(self.base_dir):
             try:
                 os.makedirs(self.base_dir)
@@ -654,6 +654,9 @@ class RecorderWindow(QMainWindow):
             "stages": []
         }
         
+        # Track loaded files to avoid circular dependencies
+        loaded_files = set()
+        
         # Helper to find pipeline by name in list
         def get_pipeline_index(name, pipelines):
             for i, p in enumerate(pipelines):
@@ -661,18 +664,36 @@ class RecorderWindow(QMainWindow):
                     return i
             return -1
         
-        # If a single string is passed, wrap it in a list
-        if isinstance(paths, str):
-            paths = [paths]
+        # Helper to load a single config file recursively
+        def load_config_recursive(path, base_dir=None):
+            # Resolve relative paths
+            if base_dir and not os.path.isabs(path):
+                path = os.path.join(base_dir, path)
             
-        for path in paths:
+            # Normalize path to detect duplicates
+            normalized_path = os.path.normpath(os.path.abspath(path))
+            
+            # Check for circular dependency
+            if normalized_path in loaded_files:
+                print(f"Skipping already loaded config: {path}")
+                return
+            
             if not os.path.exists(path):
                 print(f"Warning: Configuration file not found: {path}")
-                continue
-                
+                return
+            
+            loaded_files.add(normalized_path)
+            config_dir = os.path.dirname(normalized_path)
+            
             try:
                 with open(path, 'r') as f:
                     cfg = json.load(f)
+                    
+                    # First, recursively load any referenced configuration files
+                    if "configuration_files" in cfg and isinstance(cfg["configuration_files"], list):
+                        for ref_file in cfg["configuration_files"]:
+                            load_config_recursive(ref_file, config_dir)
+                    
                     # Merge data_directory (last one wins)
                     if "data_directory" in cfg:
                         merged_config["data_directory"] = cfg["data_directory"]
@@ -714,6 +735,14 @@ class RecorderWindow(QMainWindow):
                                 
             except Exception as e:
                 print(f"Error loading config {path}: {e}")
+        
+        # If a single string is passed, wrap it in a list
+        if isinstance(paths, str):
+            paths = [paths]
+        
+        # Load all config files recursively
+        for path in paths:
+            load_config_recursive(path)
 
         return merged_config
 
@@ -906,7 +935,6 @@ class RecorderWindow(QMainWindow):
                 dir_name = f"{stage_timestamp}_{stage_name}"
                 
             stage_dir = os.path.join(self.base_dir, dir_name)
-            self.current_stage_dir = stage_dir
             try:
                 os.makedirs(stage_dir, exist_ok=True)
                 print(f"Created directory: {stage_dir}")
@@ -914,6 +942,9 @@ class RecorderWindow(QMainWindow):
                 print(f"Error creating directory {stage_dir}: {e}")
                 # Fallback to base_dir if stage_dir creation fails
                 stage_dir = self.base_dir
+            
+            # Set current_stage_dir after potential fallback
+            self.current_stage_dir = stage_dir
 
             # Start ROS Bag first (can be slow to initialize)
             ros_topics = self.config.get("ros_topics", [])
