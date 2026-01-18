@@ -208,8 +208,10 @@ def main():
         return
 
     if args.list:
-        print(f"Videos in session {os.path.basename(args.directory)}:")
-        for video_basename in videos:
+        session_name = os.path.basename(args.directory.rstrip('/'))
+        print(f"Videos in session {session_name}:")
+        for video_entry in videos:
+            video_basename = os.path.splitext(video_entry.get("file", ""))[0]
             print(f" - {video_basename}")
         return
         
@@ -223,7 +225,9 @@ def main():
             sys.exit(1)
 
     threads = []
-    for video_basename in videos:
+    for video_entry in videos:
+        video_basename = os.path.splitext(video_entry.get("file", ""))[0]
+
         json_file = os.path.join(args.directory, f"{video_basename}.json")
         if os.path.exists(json_file):
             t = threading.Thread(target=extract_frames, args=(json_file, extracted_dir))
@@ -236,13 +240,15 @@ def main():
         t.join()
 
     # Process ROS bag if present
-    rosbag_name = index_data.get("rosbag")
-    if rosbag_name:
-        bag_path = os.path.join(args.directory, rosbag_name)
-        if os.path.exists(bag_path):
-            rosbag_to_csv(bag_path, extracted_dir)
-        else:
-            print(f"Warning: Rosbag directory not found at {bag_path}")
+    rosbag_entry = index_data.get("rosbag")
+    if rosbag_entry and isinstance(rosbag_entry, dict):
+        rosbag_name = rosbag_entry.get("name")
+        if rosbag_name:
+            bag_path = os.path.join(args.directory, rosbag_name)
+            if os.path.exists(bag_path):
+                rosbag_to_csv(bag_path, extracted_dir)
+            else:
+                print(f"Warning: Rosbag directory not found at {bag_path}")
 
 if __name__ == "__main__":
     main()

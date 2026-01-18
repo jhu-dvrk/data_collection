@@ -379,6 +379,7 @@ class RecorderWindow(QMainWindow):
         self.last_bag_name = None
         self.last_bag_duration = 0.0
         self.last_bag_message_count = 0
+        self.ignore_rosbag_warnings = False
 
         # ROS2 Setup
         self.ros_node = None
@@ -726,10 +727,20 @@ class RecorderWindow(QMainWindow):
                 msg_text += " No topics recorded.\n"
                 
             if missing_topics:
+                if self.ignore_rosbag_warnings:
+                    return
+
                 msg_text += f"\nWARNING: Missing topics:\n"
                 for t in missing_topics:
                     msg_text += f" - {t}\n"
-                QMessageBox.warning(self, "Rosbag Verification", msg_text)
+                
+                msg_box = QMessageBox(QMessageBox.Warning, "Rosbag Verification", msg_text, QMessageBox.Ok, self)
+                chk_ignore = QCheckBox("Ignore future warnings")
+                msg_box.setCheckBox(chk_ignore)
+                msg_box.exec_()
+                
+                if chk_ignore.isChecked():
+                    self.ignore_rosbag_warnings = True
             else:
                 QMessageBox.information(self, "Rosbag Verification", msg_text)
         except Exception as e:
