@@ -6,7 +6,9 @@
       "record": true,
       "encoding": {
         "bitrate": 20000,
-        "frame_rate": 30     
+        "frame_rate": 30,
+        "width": 1920,
+        "height": 540       
       }
     }
   ]
