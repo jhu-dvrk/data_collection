@@ -788,7 +788,8 @@ class RecorderWindow(QMainWindow):
                 if chk_ignore.isChecked():
                     self.ignore_rosbag_warnings = True
             else:
-                QMessageBox.information(self, "Rosbag Verification", msg_text)
+                # If everything is fine, just log to console instead of showing a popup
+                print(msg_text)
         except Exception as e:
             QMessageBox.critical(self, "Rosbag Error", f"Failed to verify rosbag at {bag_path}: {e}")
 
