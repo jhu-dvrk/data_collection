@@ -75,7 +75,7 @@ def rosbag_to_csv(bag_path, output_dir):
             f.close()
     print(f"Finished CSV conversion.")
 
-def extract_frames(input_path, output_dir=None):
+def extract_frames(input_path, output_dir=None, image_format='png'):
     if not input_path.lower().endswith('.json'):
         print("Error: Input must be a JSON timestamp file.")
         return
@@ -169,8 +169,8 @@ def extract_frames(input_path, output_dir=None):
             else:
                 ts_str = f"{float(ts):.6f}"
             
-            # Construct filename: VideoName_Timestamp.png
-            image_name = f"{video_basename}_{ts_str}.png"
+            # Construct filename: VideoName_Timestamp.ext
+            image_name = f"{video_basename}_{ts_str}.{image_format}"
             image_path = os.path.join(output_dir, image_name)
             
             cv2.imwrite(image_path, frame)
@@ -193,6 +193,7 @@ def main():
     parser = argparse.ArgumentParser(description="Extract frames from all videos in a session directory using index.json")
     parser.add_argument("-d", "--directory", help="Path to the recording session directory", required=True)
     parser.add_argument("-l", "--list", action="store_true", help="List names of videos in the session but do not extract frames")
+    parser.add_argument("-f", "--format", choices=['jpg', 'png'], default='png', help="Output image format (jpg or png, default: png)")
     
     args = parser.parse_args()
 
@@ -236,7 +237,7 @@ def main():
 
         json_file = os.path.join(args.directory, f"{video_basename}.json")
         if os.path.exists(json_file):
-            t = threading.Thread(target=extract_frames, args=(json_file, extracted_dir))
+            t = threading.Thread(target=extract_frames, args=(json_file, extracted_dir, args.format))
             t.start()
             threads.append(t)
         else:
