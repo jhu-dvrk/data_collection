@@ -14,12 +14,12 @@
             },
             "description": "List of ROS topics to be recorded in the bag file"
         },
-        "steps": {
+        "stages": {
             "type": "array",
             "items": {
                 "type": "string"
             },
-            "description": "Optional list of steps to sequence recordings"
+            "description": "Optional list of stages to sequence recordings"
         },
         "pipelines": {
             "type": "array",

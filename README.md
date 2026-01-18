@@ -39,7 +39,7 @@ Define your video sources in a JSON file. The configuration format is defined in
     "/PSM1/measured_cv",
     "/PSM1/jaw/measured_js"
   ],
-  "steps": [
+  "stages": [
     "calibration",
     "exercise_1",
     "exercise_2"
@@ -80,14 +80,14 @@ Multiple configuration files can be loaded and merged.  You can collect multiple
 ./data_recorder.py -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
 ```
 
-### 3. Steps Feature
+### 3. Stages Feature
 
-If the `steps` field is provided in the configuration, a "Steps" list will appear on the right side of the GUI.
+If the `stages` field is provided in the configuration, a "Stages" list will appear on the right side of the GUI.
 
-*   **File Naming**: When a step is selected, its name is appended to the session directory and all recorded files. The naming convention for video files is `camera_name_YYMMDD_HHMMSS_step.mp4`.
-*   **Auto-Advancement**: After stopping a recording, the application automatically selects the next step in the list.
-*   **Looping**: When the last step is completed, it wraps back to the first step.
-*   **Manual Override**: Users can click any step in the list to select it for the next recording (selection is disabled while recording is in progress).
+*   **File Naming**: When a stage is selected, its name is appended to the session directory and all recorded files. The naming convention for video files is `camera_name_YYMMDD_HHMMSS_stage.mp4`.
+*   **Auto-Advancement**: After stopping a recording, the application automatically selects the next stage in the list.
+*   **Looping**: When the last stage is completed, it wraps back to the first stage.
+*   **Manual Override**: Users can click any stage in the list to select it for the next recording (selection is disabled while recording is in progress).
 *   **Hardware-Accelerated Encoding**: Automatically detects and uses available hardware encoders (NVENC, VAAPI) to minimize CPU usage.
 *   **Nanosecond Precision**: All video frames are timestamped in nanoseconds since epoch, ensuring perfect alignment with ROS2 bags.
 *   **Session Metadata**: An `index.json` file is created in each session directory, storing video/bag durations and metadata.
