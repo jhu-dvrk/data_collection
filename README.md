@@ -8,6 +8,7 @@ The application also integrates with ROS2 for remote control and status monitori
 
 *   **ROS2**: The application is a ROS2 node and requires a working ROS2 installation (Humble, Jazzy, etc.).
 *   **GStreamer 1.0**: (plugins-base, plugins-good, plugins-bad, plugins-ugly, libav)
+*   **System Tools**: `gst-inspect-1.0` (required for hardware encoder discovery)
 *   **System Packages**:
     ```bash
     sudo apt install python3-opencv python3-numpy python3-pyqt5
@@ -87,24 +88,26 @@ If the `steps` field is provided in the configuration, a "Steps" list will appea
 *   **Auto-Advancement**: After stopping a recording, the application automatically selects the next step in the list.
 *   **Looping**: When the last step is completed, it wraps back to the first step.
 *   **Manual Override**: Users can click any step in the list to select it for the next recording (selection is disabled while recording is in progress).
-*   **Session Metadata**: An `index.json` file is created in each session directory, storing the actual duration for each video (computed from frame timestamps) and the ROS bag (extracted from metadata), as well as the total ROS bag message count.
+*   **Hardware-Accelerated Encoding**: Automatically detects and uses available hardware encoders (NVENC, VAAPI) to minimize CPU usage.
+*   **Nanosecond Precision**: All video frames are timestamped in nanoseconds since epoch, ensuring perfect alignment with ROS2 bags.
+*   **Session Metadata**: An `index.json` file is created in each session directory, storing video/bag durations and metadata.
 
 ### 4. Data Post-processing
 
 The `extract_frames.py` script identifies all data in a session directory and:
-1.  Extracts individual frames from all recorded `.mp4` files.
+1.  Extracts individual frames from all recorded `.mp4` files using sidecar `.json` nanosecond timestamps.
 2.  Converts all recorded ROS bag topics into individual `.csv` files.
 
 To process a recorded session directory:
 
 ```bash
-./extract_frames.py 20260117_153206
+./extract_frames.py -d 20260117_153206
 ```
 
 To list the videos in a session without processing:
 
 ```bash
-./extract_frames.py 20260117_153206 -l
+./extract_frames.py -d 20260117_153206 -l
 ```
 
 ## ROS2 Integration

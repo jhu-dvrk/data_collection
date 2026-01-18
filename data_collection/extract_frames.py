@@ -111,11 +111,15 @@ def extract_frames(input_path, output_dir=None):
     # Load timestamps
     print(f"Loading timestamps from {json_path}...")
     # data already loaded
-    timestamps = data.get("timestamps", data.get("timestamps_ms"))
+    timestamps = data.get("timestamps_ns", data.get("timestamps", data.get("timestamps_ms")))
         
     if not timestamps:
         print("Error: No timestamps found in JSON file")
         return
+
+    # Determine if we need to convert units to seconds for the filename
+    is_ns = "timestamps_ns" in data
+    is_ms = "timestamps_ms" in data and not is_ns
 
     # Output directory
     video_basename = os.path.splitext(os.path.basename(video_path))[0]
@@ -159,9 +163,14 @@ def extract_frames(input_path, output_dir=None):
             
             # Use video basename for the image prefix
             # Format timestamp in filename
-            # If ts is float (epoch seconds), use 6 decimal places.
-            # If ts is int (ms), usually large integer.
-            ts_str = f"{float(ts):.6f}"
+            if is_ns:
+                # If ns, we can keep as integer or convert to sec with many decimals
+                # Using seconds with 9 decimals for ns precision
+                ts_str = f"{int(ts) / 1e9:.9f}"
+            elif is_ms:
+                ts_str = f"{float(ts) / 1000.0:.6f}"
+            else:
+                ts_str = f"{float(ts):.6f}"
             
             # Construct filename: VideoName_Timestamp.jpg
             image_name = f"{video_basename}_{ts_str}.jpg"
@@ -174,9 +183,9 @@ def extract_frames(input_path, output_dir=None):
                 print(f"[{video_basename}] Saved {saved_count} images...")
         else:
             # If we have more frames than timestamps, we stop or warn?
-            # Usually happens if recorder was killed or buffering
             if idx == len(timestamps):
                  print(f"\n[{video_basename}] Warning: Video has more frames than timestamps (stopped at frame {idx})")
+            break # Stop if we ran out of timestamps
             
         idx += 1
 

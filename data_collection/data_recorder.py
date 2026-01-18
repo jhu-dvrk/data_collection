@@ -27,6 +27,35 @@ from PyQt5.QtGui import QImage, QPixmap, QPainter
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
 
+    _best_encoder = None
+
+    @classmethod
+    def get_best_encoder(cls):
+        if cls._best_encoder is not None:
+            return cls._best_encoder
+        
+        # Priority list of encoders: NVENC, VAAPI, software (x264)
+        # We test availability using gst-inspect-1.0
+        encoders = [
+            ("nvv4l2h264enc", "nvv4l2h264enc bitrate={bitrate} preset-level=4 control-rate=1 ! h264parse"),
+            ("vaapih264enc", "vaapih264enc bitrate={bitrate_kb} ! h264parse"),
+            ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
+        ]
+
+        for plugin, pipeline in encoders:
+            try:
+                result = subprocess.run(["gst-inspect-1.0", plugin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if result.returncode == 0:
+                    print(f"Detected GStreamer hardware encoder: {plugin}")
+                    cls._best_encoder = (plugin, pipeline)
+                    return cls._best_encoder
+            except Exception:
+                continue
+        
+        # Fallback to x264enc if all else fails
+        cls._best_encoder = ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
+        return cls._best_encoder
+
     def __init__(self, pipeline_config):
         super().__init__()
         self.pipeline_config = pipeline_config
@@ -141,17 +170,16 @@ class VideoThread(QThread):
         # Write frame if writer exists
         if self.is_recording and self.writer:
             try:
-                
-                # Calculate absolute timestamp
+                # Calculate absolute timestamp (nanoseconds since epoch)
                 if self.rec_start_epoch is None:
                     self.rec_start_epoch = time.time()
                     self.rec_start_gst = timestamp
                     
-                # Time delta in seconds
-                delta_sec = (timestamp - self.rec_start_gst) / 1000.0
-                abs_ts_sec = self.rec_start_epoch + delta_sec
+                # Calculate nanoseconds using GStreamer stream position delta
+                delta_ms = (timestamp - self.rec_start_gst)
+                abs_ts_ns = int(self.rec_start_epoch * 1e9) + int(delta_ms * 1e6)
                 
-                self.frame_timestamps.append(abs_ts_sec)
+                self.frame_timestamps.append(abs_ts_ns)
                 
                 self.writer.write(frame)
             except Exception as e:
@@ -186,10 +214,23 @@ class VideoThread(QThread):
         target_width = encoding.get('width', self.width)
         target_height = encoding.get('height', self.height)
         
+        # Get best encoder
+        plugin, encoder_template = self.get_best_encoder()
+        
+        # Construct parameters
+        # x264enc/vaapih264enc usually use kbit/sec. NVENC uses bit/sec.
+        # We assume 'bitrate' config is in kbit/sec.
+        bitrate_kb = int(bitrate)
+        bitrate_bits = bitrate_kb * 1000
+        
+        encoder_str = encoder_template.format(
+            bitrate=bitrate_bits,
+            bitrate_kb=bitrate_kb,
+            speed_preset=int(speed_preset),
+            key_int_max=int(key_int_max)
+        )
+
         # Construct writer pipeline
-        # x264enc bitrate is in kbit/sec
-        # We use appsrc -> videoconvert -> x264enc -> mp4mux -> filesink
-        # Note: We quote the location to handle path with spaces safely, just in case
         scale_str = ""
         if target_width != self.width or target_height != self.height:
             scale_str = f"videoscale ! video/x-raw,width={int(target_width)},height={int(target_height)} ! "
@@ -197,7 +238,7 @@ class VideoThread(QThread):
         writer_pipeline = (
             f"appsrc ! videoconvert ! "
             f"{scale_str}"
-            f"x264enc bitrate={int(bitrate)} speed-preset={int(speed_preset)} key-int-max={int(key_int_max)} ! "
+            f"{encoder_str} ! "
             f"mp4mux ! filesink location=\"{filepath}\""
         )
         
@@ -232,12 +273,13 @@ class VideoThread(QThread):
                         "name": self.name,
                         "fps": self.fps,
                         "video_file": os.path.basename(self.json_filepath).replace(".json", ".mp4"),
-                        "timestamps_ms": [ts * 1000.0 for ts in self.frame_timestamps]
+                        "timestamps_ns": self.frame_timestamps
                     }
                     with open(self.json_filepath, 'w') as f:
                         json.dump(data, f, indent=2)
-                    print(f"Saved timestamps to {self.json_filepath}")
+                    print(f"Saved {len(self.frame_timestamps)} timestamps to {self.json_filepath}")
                 except Exception as e:
+                    print(f"Error saving timestamps for {self.name}: {e}")
                     print(f"Error saving timestamps for {self.name}: {e}")
             
         self.is_recording = False
@@ -760,9 +802,9 @@ class RecorderWindow(QMainWindow):
                         try:
                             with open(th.last_json_path, 'r') as f:
                                 v_data = json.load(f)
-                                ts_ms = v_data.get("timestamps_ms", [])
-                                if len(ts_ms) > 1:
-                                    v_duration = (ts_ms[-1] - ts_ms[0]) / 1000.0
+                                ts_ns = v_data.get("timestamps_ns", [])
+                                if len(ts_ns) > 1:
+                                    v_duration = (ts_ns[-1] - ts_ns[0]) / 1e9
                                 else:
                                     v_duration = 0.0
                         except Exception as e:
