@@ -58,7 +58,7 @@ Define your video sources in a JSON file. The configuration format is defined in
     },
     {
       "name": "test_pattern",
-      "stream": "videotestsrc pattern=ball",
+      "stream": "videotestsrc pattern=smpte75",
       "record": false,
       "popup": false
     }
