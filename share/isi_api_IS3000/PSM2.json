@@ -1,0 +1,7 @@
+{
+  "ros_topics": [ 
+    "/PSM2/measured_js",
+    "/PSM2/measured_cp",
+    "/PSM2/jaw/measured_js"
+  ]
+}

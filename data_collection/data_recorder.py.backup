@@ -37,12 +37,29 @@ class VideoThread(QThread):
         # Priority list of encoders: NVENC, VAAPI, software (x264)
         # We test availability using gst-inspect-1.0
         encoders = [
-            ("nvv4l2h264enc", "nvv4l2h264enc bitrate={bitrate} preset-level=4 control-rate=1 ! h264parse"),
+            ("nvv4l2h264enc", "nvv4l2h264enc bitrate={bitrate} p
+    change_pixmap_signal = pyqtSignal(np.ndarray)
+
+    _best_encoder = None
+
+    @classmethod
+    def get_best_encoder(cls):
+        if cls._best_encoder is not None:
+            return cls._best_encoder
+        reset-level=4 control-rate=1 ! h264parse"),
             ("vaapih264enc", "vaapih264enc bitrate={bitrate_kb} ! h264parse"),
             ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
         ]
 
-        for plugin, pipeline in encoders:
+        for plugin, pipeline in encoders:pp
+    change_pixmap_signal = pyqtSignal(np.ndarray)
+
+    _best_encoder = None
+
+    change_pixmap_signal = pyqtSignal(np.ndarray)
+
+    _best_encoder = None
+
             try:
                 result = subprocess.run(["gst-inspect-1.0", plugin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if result.returncode == 0:
@@ -549,6 +566,34 @@ class RecorderWindow(QMainWindow):
         # Publisher "recording" (Bool)
         self.pub_recording = self.ros_node.create_publisher(
             Bool, '~/recording', qos_profile
+        painter.end()
+
+    def set_popup_visible(self, visible, name=""):
+        if visible:
+            if not self.popup_window:
+                self.popup_window = VideoPopupWindow(name)
+                self.popup_window.closed.connect(self.on_popup_closed)
+            self.popup_window.show()
+        else:
+            if self.popup_window:
+                self.popup_window.hide()
+
+    def on_popup_closed(self):
+        painter.end()
+
+    def set_popup_visible(self, visible, name=""):
+        if visible:
+            if not self.popup_window:
+                self.popup_window = VideoPopupWindow(name)
+                self.popup_window.closed.connect(self.on_popup_closed)
+            self.popup_window.show()
+        else:
+            if self.popup_window:
+                self.popup_window.hide()
+
+    def on_popup_closed(self):
+        self.popup_closed.emit()
+        self.popup_closed.emit()
         )
 
     def _rosbag_supports_topics(self):
@@ -562,6 +607,9 @@ class RecorderWindow(QMainWindow):
             # Run help and inspect output for the `--topics` option
             p = subprocess.run(["ros2", "bag", "record", "--help"], capture_output=True, text=True)
             out = (p.stdout or "") + (p.stderr or "")
+        """Detect whether the installed `ros2 bag record` command accepts a
+        `--topics` option. Result is cached on the instance.
+        """
             self._rosbag_topics_flag_cache = ('--topics' in out)
         except Exception:
             # If anything goes wrong, assume older style (positional topics)

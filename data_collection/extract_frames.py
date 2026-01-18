@@ -23,23 +23,56 @@ def flatten_dict(d, parent_key='', sep='.'):
             items.append((new_key, v))
     return dict(items)
 
+def detect_rosbag_format(bag_path):
+    """Detect the storage format of a rosbag2 directory.
+    Returns 'mcap', 'sqlite3', or None if unable to detect.
+    """
+    # Check for common storage files
+    if os.path.isdir(bag_path):
+        # Look for mcap file
+        mcap_files = [f for f in os.listdir(bag_path) if f.endswith('.mcap')]
+        if mcap_files:
+            return 'mcap'
+        
+        # Look for sqlite3 db file
+        db3_files = [f for f in os.listdir(bag_path) if f.endswith('.db3')]
+        if db3_files:
+            return 'sqlite3'
+    
+    # Try opening with each storage plugin
+    reader = rosbag2_py.SequentialReader()
+    for storage_id in ['mcap', 'sqlite3']:
+        try:
+            reader.open(
+                rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
+                rosbag2_py.ConverterOptions('', '')
+            )
+            return storage_id
+        except Exception:
+            continue
+    
+    return None
+
 def rosbag_to_csv(bag_path, output_dir):
     print(f"Converting ROS bag {bag_path} to CSV...")
-    reader = rosbag2_py.SequentialReader()
     
-    # Try mcap then sqlite3
-    storage_id = 'mcap'
+    # Detect storage format
+    storage_id = detect_rosbag_format(bag_path)
+    if not storage_id:
+        print(f"Error: Unable to detect rosbag format for {bag_path}")
+        return
+    
+    print(f"Detected rosbag storage format: {storage_id}")
+    
+    reader = rosbag2_py.SequentialReader()
     try:
         reader.open(
             rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
             rosbag2_py.ConverterOptions('', '')
         )
-    except:
-        storage_id = 'sqlite3'
-        reader.open(
-            rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
-            rosbag2_py.ConverterOptions('', '')
-        )
+    except Exception as e:
+        print(f"Error opening rosbag with {storage_id} format: {e}")
+        return
 
     topic_types = {topic.name: topic.type for topic in reader.get_all_topics_and_types()}
     writers = {}

@@ -1,0 +1,7 @@
+{
+  "ros_topics": [ 
+    "/MTML1/measured_js",
+    "/MTML1/measured_cp",
+    "/MTML1/gripper/measured_js"
+  ]
+}
