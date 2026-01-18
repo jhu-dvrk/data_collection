@@ -1,0 +1,10 @@
+{
+  "pipelines": [
+    {
+      "name": "test_stream",
+      "stream": "videotestsrc pattern=ball is-live=true ! video/x-raw,width=640,height=480,framerate=30/1 ! clockoverlay time-format='%H:%M:%S' valignment=bottom halignment=right font-desc='Sans, 20'",
+      "record": true,
+      "preview": true
+    }
+  ]
+}

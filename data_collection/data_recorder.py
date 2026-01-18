@@ -127,6 +127,10 @@ class VideoThread(QThread):
                     # Get timestamp from GStreamer source (milliseconds)
                     ts = cap.get(cv2.CAP_PROP_POS_MSEC)
                     
+                    # Fallback to system time if GStreamer cannot provide position (common for live streams)
+                    if ts <= 0:
+                        ts = time.time() * 1000.0
+
                     # Handle Recording State Changes (using clean frame)
                     self._handle_recording(cv_img, ts)
 

@@ -124,12 +124,9 @@ def extract_frames(input_path, output_dir=None):
     # Output directory
     video_basename = os.path.splitext(os.path.basename(video_path))[0]
     if output_dir is None:
-        # Use video filename without extension + _images
-        output_dir = os.path.join(os.path.dirname(video_path), video_basename + "_images")
-    else:
-        # Create a subdirectory within the provided output directory
-        output_dir = os.path.join(output_dir, video_basename + "_images")
+        output_dir = os.path.dirname(video_path)
     
+    # Ensure output_dir exists
     if not os.path.exists(output_dir):
         try:
             os.makedirs(output_dir)
@@ -172,8 +169,8 @@ def extract_frames(input_path, output_dir=None):
             else:
                 ts_str = f"{float(ts):.6f}"
             
-            # Construct filename: VideoName_Timestamp.jpg
-            image_name = f"{video_basename}_{ts_str}.jpg"
+            # Construct filename: VideoName_Timestamp.png
+            image_name = f"{video_basename}_{ts_str}.png"
             image_path = os.path.join(output_dir, image_name)
             
             cv2.imwrite(image_path, frame)
