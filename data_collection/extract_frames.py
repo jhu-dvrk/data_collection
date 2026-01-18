@@ -7,6 +7,8 @@ import sys
 import threading
 import csv
 import rosbag2_py
+import multiprocessing
+import math
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 from rosidl_runtime_py.convert import message_to_ordereddict
@@ -75,7 +77,45 @@ def rosbag_to_csv(bag_path, output_dir):
             f.close()
     print(f"Finished CSV conversion.")
 
-def extract_frames(input_path, output_dir=None, image_format='png'):
+def process_video_chunk(args):
+    """
+    Worker function to process a chunk of the video.
+    args: (video_path, output_dir, timestamps_chunk, start_frame_idx, image_format, video_basename, is_ns, is_ms)
+    """
+    video_path, output_dir, timestamps, start_frame_idx, image_format, video_basename, is_ns, is_ms = args
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Error: Could not open video {video_path} in worker.")
+        return 0
+
+    # Seek to start frame
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_idx)
+    
+    saved_count = 0
+    for i, ts in enumerate(timestamps):
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Format timestamp in filename
+        if is_ns:
+            ts_str = f"{int(ts) / 1e9:.9f}"
+        elif is_ms:
+            ts_str = f"{float(ts) / 1000.0:.6f}"
+        else:
+            ts_str = f"{float(ts):.6f}"
+        
+        image_name = f"{video_basename}_{ts_str}.{image_format}"
+        image_path = os.path.join(output_dir, image_name)
+        
+        cv2.imwrite(image_path, frame)
+        saved_count += 1
+        
+    cap.release()
+    return saved_count
+
+def extract_frames(input_path, output_dir=None, image_format='png', num_jobs=1):
     if not input_path.lower().endswith('.json'):
         print("Error: Input must be a JSON timestamp file.")
         return
@@ -94,10 +134,8 @@ def extract_frames(input_path, output_dir=None, image_format='png'):
     # Determine video path
     video_filename = data.get("video_file")
     if video_filename:
-        # Assuming video is in the same directory as json
         video_path = os.path.join(os.path.dirname(input_path), video_filename)
         
-    # Fallback if video_file key invalid or file not found, try replacing extension
     if not video_path or not os.path.exists(video_path):
          base = os.path.splitext(input_path)[0]
          possible_vid = base + ".mp4"
@@ -110,14 +148,12 @@ def extract_frames(input_path, output_dir=None, image_format='png'):
 
     # Load timestamps
     print(f"Loading timestamps from {json_path}...")
-    # data already loaded
     timestamps = data.get("timestamps_ns", data.get("timestamps", data.get("timestamps_ms")))
         
     if not timestamps:
         print("Error: No timestamps found in JSON file")
         return
 
-    # Determine if we need to convert units to seconds for the filename
     is_ns = "timestamps_ns" in data
     is_ms = "timestamps_ms" in data and not is_ns
 
@@ -126,7 +162,6 @@ def extract_frames(input_path, output_dir=None, image_format='png'):
     if output_dir is None:
         output_dir = os.path.dirname(video_path)
     
-    # Ensure output_dir exists
     if not os.path.exists(output_dir):
         try:
             os.makedirs(output_dir)
@@ -134,68 +169,65 @@ def extract_frames(input_path, output_dir=None, image_format='png'):
             print(f"Error creating output directory {output_dir}: {e}")
             return
 
-    # Open Video
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"Error: Could not open video {video_path}")
-        return
-
-    video_basename = os.path.splitext(os.path.basename(video_path))[0]
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     print(f"[{video_basename}] Processing {video_path}")
-    print(f"[{video_basename}] Total frames (metadata): {frame_count}, Total timestamps: {len(timestamps)}")
+    print(f"[{video_basename}] Total timestamps: {len(timestamps)}")
     print(f"[{video_basename}] Output directory: {output_dir}")
+    print(f"[{video_basename}] Parallel jobs: {num_jobs}")
+
+    # Prepare chunks
+    total_frames = len(timestamps)
+    chunk_size = math.ceil(total_frames / num_jobs)
     
-    # Iterate
-    idx = 0
-    saved_count = 0
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
+    tasks = []
+    for i in range(num_jobs):
+        start_idx = i * chunk_size
+        end_idx = min((i + 1) * chunk_size, total_frames)
+        
+        if start_idx >= total_frames:
             break
             
-        if idx < len(timestamps):
-            ts = timestamps[idx]
-            
-            # Use video basename for the image prefix
-            # Format timestamp in filename
-            if is_ns:
-                # If ns, we can keep as integer or convert to sec with many decimals
-                # Using seconds with 9 decimals for ns precision
-                ts_str = f"{int(ts) / 1e9:.9f}"
-            elif is_ms:
-                ts_str = f"{float(ts) / 1000.0:.6f}"
-            else:
-                ts_str = f"{float(ts):.6f}"
-            
-            # Construct filename: VideoName_Timestamp.ext
-            image_name = f"{video_basename}_{ts_str}.{image_format}"
-            image_path = os.path.join(output_dir, image_name)
-            
-            cv2.imwrite(image_path, frame)
-            saved_count += 1
-            
-            if saved_count % 100 == 0:
-                print(f"[{video_basename}] Saved {saved_count} images...")
-        else:
-            # If we have more frames than timestamps, we stop or warn?
-            if idx == len(timestamps):
-                 print(f"\n[{video_basename}] Warning: Video has more frames than timestamps (stopped at frame {idx})")
-            break # Stop if we ran out of timestamps
-            
-        idx += 1
+        chunk_timestamps = timestamps[start_idx:end_idx]
+        
+        # Args: (video_path, output_dir, timestamps_chunk, start_frame_idx, image_format, video_basename, is_ns, is_ms)
+        task_args = (
+            video_path, 
+            output_dir, 
+            chunk_timestamps, 
+            start_idx, # start_frame_idx assumes 1-to-1 mapping with timestamps idx
+            image_format, 
+            video_basename, 
+            is_ns, 
+            is_ms
+        )
+        tasks.append(task_args)
 
-    cap.release()
-    print(f"[{video_basename}] Done. Extracted {saved_count} frames to {output_dir}")
+    # Run in parallel
+    total_saved = 0
+    if num_jobs > 1:
+        with multiprocessing.Pool(processes=num_jobs) as pool:
+            results = pool.map(process_video_chunk, tasks)
+            total_saved = sum(results)
+    else:
+        # Sequential fallback (avoid overhead)
+        total_saved = process_video_chunk(tasks[0])
+
+    print(f"[{video_basename}] Done. Extracted {total_saved} frames to {output_dir}")
 
 def main():
     parser = argparse.ArgumentParser(description="Extract frames from all videos in a session directory using index.json")
     parser.add_argument("-d", "--directory", help="Path to the recording session directory", required=True)
     parser.add_argument("-l", "--list", action="store_true", help="List names of videos in the session but do not extract frames")
     parser.add_argument("-f", "--format", choices=['jpg', 'png'], default='png', help="Output image format (jpg or png, default: png)")
+    parser.add_argument("-j", "--jobs", type=int, help="Number of parallel jobs per video (default: half of available cores)")
     
     args = parser.parse_args()
+
+    # Determine default jobs
+    cpu_count = os.cpu_count() or 1
+    if args.jobs:
+        num_jobs = args.jobs
+    else:
+        num_jobs = max(1, cpu_count // 2)
 
     index_path = os.path.join(args.directory, "index.json")
     if not os.path.exists(index_path):
@@ -231,20 +263,16 @@ def main():
             print(f"Error creating directory {extracted_dir}: {e}")
             sys.exit(1)
 
-    threads = []
+    # Process videos sequentially, but each video uses parallel extraction
     for video_entry in videos:
         video_basename = os.path.splitext(video_entry.get("file", ""))[0]
 
         json_file = os.path.join(args.directory, f"{video_basename}.json")
         if os.path.exists(json_file):
-            t = threading.Thread(target=extract_frames, args=(json_file, extracted_dir, args.format))
-            t.start()
-            threads.append(t)
+            extract_frames(json_file, extracted_dir, args.format, num_jobs)
         else:
             print(f"Warning: JSON file not found for video: {video_basename}")
             
-    for t in threads:
-        t.join()
 
     # Process ROS bag if present
     rosbag_entry = index_data.get("rosbag")
