@@ -1,6 +1,6 @@
 {
     "data_directory": "data",
-    "pipelines": [
+    "videos": [
         {
             "name": "v4l_camera",
             "stream": "v4l2src device=/dev/video0",

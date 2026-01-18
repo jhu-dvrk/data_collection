@@ -42,12 +42,12 @@ class VideoThread(QThread):
             ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
         ]
 
-        for plugin, pipeline in encoders:
+        for plugin, video in encoders:
             try:
                 result = subprocess.run(["gst-inspect-1.0", plugin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if result.returncode == 0:
                     print(f"Detected GStreamer hardware encoder: {plugin}")
-                    cls._best_encoder = (plugin, pipeline)
+                    cls._best_encoder = (plugin, video)
                     return cls._best_encoder
             except Exception:
                 continue
@@ -56,10 +56,10 @@ class VideoThread(QThread):
         cls._best_encoder = ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
         return cls._best_encoder
 
-    def __init__(self, pipeline_config):
+    def __init__(self, video_config):
         super().__init__()
-        self.pipeline_config = pipeline_config
-        self.name = pipeline_config['name']
+        self.video_config = video_config
+        self.name = video_config['name']
         self._run_flag = True
         
         # Recording state
@@ -90,23 +90,23 @@ class VideoThread(QThread):
 
     def run(self):
         # Support only 'stream' key
-        source_str = self.pipeline_config.get('stream')
+        source_str = self.video_config.get('stream')
         if not source_str:
-            print(f"Error: No stream defined for pipeline '{self.name}'")
+            print(f"Error: No stream defined for video '{self.name}'")
             return
         
-        # Construct GStreamer pipeline for OpenCV capture
+        # Construct GStreamer video pipeline for OpenCV capture
         # We need BGR frames for OpenCV
         if "appsink" not in source_str:
-            read_pipeline = f"{source_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
+            read_video_pipeline = f"{source_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
         else:
-            read_pipeline = source_str
+            read_video_pipeline = source_str
 
         # Note: We must specify cv2.CAP_GSTREAMER to force GStreamer backend
-        cap = cv2.VideoCapture(read_pipeline, cv2.CAP_GSTREAMER)
+        cap = cv2.VideoCapture(read_video_pipeline, cv2.CAP_GSTREAMER)
 
         if not cap.isOpened():
-            print(f"Error: Could not open pipeline '{self.name}'")
+            print(f"Error: Could not open video '{self.name}'")
             return
 
         # Attempt to get stream properties
@@ -115,7 +115,7 @@ class VideoThread(QThread):
             self.fps = gst_fps
         
         while self._run_flag:
-            # Only read from pipeline if somebody needs it (recording, preview, or popup)
+            # Only read from video if somebody needs it (recording, preview, or popup)
             # We also check rec_requested so we can start recording even if no preview
             if self.rec_requested or self.is_recording or self.preview_enabled or self.popup_enabled:
                 ret, cv_img = cap.read()
@@ -158,7 +158,7 @@ class VideoThread(QThread):
     def _handle_recording(self, frame, timestamp):
         # Check if we need to start recording
         if self.rec_requested and not self.is_recording:
-             if self.pipeline_config.get('record', True):
+             if self.video_config.get('record', True):
                  self._start_writer()
              else:
                  print(f"Skipping recording for video {self.name} (record=false)")
@@ -195,7 +195,7 @@ class VideoThread(QThread):
         
         self.rec_start_epoch = None
         self.rec_start_gst = None
-        # Sanitize name for filename and pipeline use
+        # Sanitize name for filename and video use
         safe_name = self.name.replace(" ", "_")
 
         suffix = f"_{self.stage_name}" if self.stage_name else ""
@@ -210,7 +210,7 @@ class VideoThread(QThread):
         self.last_json_path = self.json_filepath
         self.frame_timestamps = []
         
-        encoding = self.pipeline_config.get('encoding', {})
+        encoding = self.video_config.get('encoding', {})
         bitrate = encoding.get('bitrate', 10000)
         speed_preset = encoding.get('speed_preset', 5)
         key_int_max = encoding.get('key_int_max', 30)
@@ -234,12 +234,12 @@ class VideoThread(QThread):
             key_int_max=int(key_int_max)
         )
 
-        # Construct writer pipeline
+        # Construct writer video pipeline
         scale_str = ""
         if target_width != self.width or target_height != self.height:
             scale_str = f"videoscale ! video/x-raw,width={int(target_width)},height={int(target_height)} ! "
 
-        writer_pipeline = (
+        writer_video_pipeline = (
             f"appsrc ! videoconvert ! "
             f"{scale_str}"
             f"{encoder_str} ! "
@@ -248,10 +248,10 @@ class VideoThread(QThread):
         
         print(f"Start recording video {self.name} to {filepath}")
         
-        # 0 is fourcc for custom pipeline in some versions, or 'MP4V' etc.
-        # With GStreamer backend, passing 0 usually implies we don't force a codec (pipeline handles it)
+        # 0 is fourcc for custom video pipeline in some versions, or 'MP4V' etc.
+        # With GStreamer backend, passing 0 usually implies we don't force a codec (video pipeline handles it)
         # fps must be provided.
-        self.writer = cv2.VideoWriter(writer_pipeline, cv2.CAP_GSTREAMER, 0, float(self.fps), (self.width, self.height))
+        self.writer = cv2.VideoWriter(writer_video_pipeline, cv2.CAP_GSTREAMER, 0, float(self.fps), (self.width, self.height))
         
         if not self.writer.isOpened():
              print(f"Failed to open VideoWriter for video {self.name}")
@@ -506,7 +506,7 @@ class RecorderWindow(QMainWindow):
         bottom_layout.addWidget(self.btn_quit)
         layout.addLayout(bottom_layout)
         
-        self.init_pipelines()
+        self.init_videos()
         self.update_record_button_state()
 
     def update_record_button_state(self):
@@ -649,7 +649,7 @@ class RecorderWindow(QMainWindow):
     def load_configs(self, paths):
         merged_config = {
             "data_directory": "data",
-            "pipelines": [],
+            "videos": [],
             "ros_topics": [],
             "stages": []
         }
@@ -657,18 +657,26 @@ class RecorderWindow(QMainWindow):
         # Track loaded files to avoid circular dependencies
         loaded_files = set()
         
-        # Helper to find pipeline by name in list
-        def get_pipeline_index(name, pipelines):
-            for i, p in enumerate(pipelines):
+        # Track master config directory for search path
+        master_config_dir = None
+        
+        # Helper to find video by name in list
+        def get_video_index(name, videos):
+            for i, p in enumerate(videos):
                 if p.get("name") == name:
                     return i
             return -1
         
         # Helper to load a single config file recursively
         def load_config_recursive(path, base_dir=None):
-            # Resolve relative paths
-            if base_dir and not os.path.isabs(path):
-                path = os.path.join(base_dir, path)
+            nonlocal master_config_dir
+            
+            # Resolve relative paths - try base_dir first, then master_config_dir
+            if not os.path.isabs(path):
+                if base_dir:
+                    path = os.path.join(base_dir, path)
+                elif master_config_dir:
+                    path = os.path.join(master_config_dir, path)
             
             # Normalize path to detect duplicates
             normalized_path = os.path.normpath(os.path.abspath(path))
@@ -714,24 +722,24 @@ class RecorderWindow(QMainWindow):
                                 merged_config["stages"].append(s)
                                 current_stages.add(s)
 
-                    # Append pipelines, renaming duplicates
-                    if "pipelines" in cfg and isinstance(cfg["pipelines"], list):
-                        for p_new in cfg["pipelines"]:
+                    # Append videos, renaming duplicates
+                    if "videos" in cfg and isinstance(cfg["videos"], list):
+                        for p_new in cfg["videos"]:
                             if "name" not in p_new:
-                                merged_config["pipelines"].append(p_new)
+                                merged_config["videos"].append(p_new)
                                 continue
                                 
                             original_name = p_new["name"]
                             name = original_name
                             counter = 2
                             
-                            # Check if name exists in currently merged pipelines and find a unique name
-                            while get_pipeline_index(name, merged_config["pipelines"]) >= 0:
+                            # Check if name exists in currently merged videos and find a unique name
+                            while get_video_index(name, merged_config["videos"]) >= 0:
                                 name = f"{original_name}_{counter}"
                                 counter += 1
                                 
                             p_new["name"] = name
-                            merged_config["pipelines"].append(p_new)
+                            merged_config["videos"].append(p_new)
                                 
             except Exception as e:
                 print(f"Error loading config {path}: {e}")
@@ -742,13 +750,16 @@ class RecorderWindow(QMainWindow):
         
         # Load all config files recursively
         for path in paths:
+            # Set master config directory from the first config file
+            if master_config_dir is None and os.path.exists(path):
+                master_config_dir = os.path.dirname(os.path.abspath(path))
             load_config_recursive(path)
 
         return merged_config
 
-    def init_pipelines(self):
+    def init_videos(self):
         cols = 2
-        for i, p_config in enumerate(self.config.get('pipelines', [])):
+        for i, p_config in enumerate(self.config.get('videos', [])):
             row = i // cols
             col = i % cols
             
@@ -979,7 +990,7 @@ class RecorderWindow(QMainWindow):
                 # Disable checkbox
                 chk.setEnabled(False)
                 # Update record config based on checkbox
-                th.pipeline_config['record'] = chk.isChecked()
+                th.video_config['record'] = chk.isChecked()
                 th.set_recording(True, stage_dir, stage_name)
 
             self.btn_record.setText("Stop Recording")
@@ -1071,7 +1082,8 @@ def main():
     parser.add_argument("-p", "--joy-topic", help="ROS Joy topic for recording control (button 0)", default=None)
     args = parser.parse_args()
 
-    config_files = args.config
+    # Resolve config file paths relative to current working directory
+    config_files = [os.path.abspath(cfg) for cfg in args.config]
 
     app = QApplication(sys.argv)
     

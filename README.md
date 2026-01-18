@@ -1,6 +1,6 @@
 # Video Data Recorder
 
-A multi-stream video recorder application using Python, PyQt5, OpenCV, and GStreamer. It allows creating flexible video pipelines via JSON configuration, provides live previews, and supports synchronized recording with timestamps.  ROS topics can also be recorded along the videos.  Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
+A multi-stream video recorder application using Python, PyQt5, OpenCV, and GStreamer. It allows creating flexible video streams via JSON configuration, provides live previews, and supports synchronized recording with timestamps.  ROS topics can also be recorded along the videos.  Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
 
 The application also integrates with ROS2 for remote control and status monitoring.
 
@@ -44,7 +44,7 @@ Define your video sources in a JSON file. The configuration format is defined in
     "exercise_1",
     "exercise_2"
   ],
-  "pipelines": [
+  "videos": [
     {
       "name": "camera_1",
       "stream": "v4l2src device=/dev/video0 ! video/x-raw,width=640,height=480,framerate=30/1",
@@ -66,15 +66,59 @@ Define your video sources in a JSON file. The configuration format is defined in
 }
 ```
 
+#### Configuration File Composition
+
+Configuration files can reference other configuration files using the `configuration_files` field. This allows you to organize and reuse configurations across different setups.
+
+**Example with `configuration_files`:**
+```json
+{
+  "data_directory": "data",
+  "configuration_files": [
+    "devices/PSM1.json",
+    "devices/PSM2.json",
+    "cameras/stereo.json"
+  ]
+}
+```
+
+**How it works:**
+- Referenced configuration files are loaded and merged recursively
+- Paths in `configuration_files` are resolved relative to the current config file's directory
+- If a file is not found relative to the current config, it falls back to searching relative to the master config file's directory
+- All `videos`, `ros_topics`, and `stages` from referenced files are combined (deduplicated)
+- The `data_directory` from the last processed file is used
+- Circular dependencies are automatically detected and prevented
+
+This approach enables modular configurations where you can maintain separate files for each device or component and combine them as needed for different experimental setups.
+
 ### 2. Running the Recorder
 
-Run the script passing one or more configuration files:
+#### Option A: Using ros2 run (Recommended)
+
+After building your workspace, run the recorder using `ros2 run`:
+
+```bash
+ros2 run data_collection data_recorder -c config.json
+```
+
+Multiple configuration files can be loaded and merged. You can collect multiple video streams and multiple ROS topics defined in existing files (e.g. `PSM1.json`). This allows users to re-use configuration files for each component used for a given experimental setup.
+
+```bash
+ros2 run data_collection data_recorder -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
+```
+
+**Note**: Configuration file paths can be relative to your current working directory or absolute paths.
+
+#### Option B: Direct Script Execution
+
+Alternatively, run the script directly:
 
 ```bash
 ./data_recorder.py -c config.json
 ```
 
-Multiple configuration files can be loaded and merged.  You can collect multiple video streams and multiple ROS topics defined in existing files (e.g. `PSM1.json`).  This allows users to re-use configuration files for each component used for a given experimental setup.
+Multiple configuration files:
 
 ```bash
 ./data_recorder.py -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
@@ -98,7 +142,23 @@ The `extract_frames.py` script identifies all data in a session directory and:
 1.  Extracts individual frames from all recorded `.mp4` files using sidecar `.json` nanosecond timestamps.
 2.  Converts all recorded ROS bag topics into individual `.csv` files.
 
+#### Using ros2 run (Recommended)
+
 To process a recorded session directory:
+
+```bash
+ros2 run data_collection extract_frames -d 20260117_153206
+```
+
+To list the videos in a session without processing:
+
+```bash
+ros2 run data_collection extract_frames -d 20260117_153206 -l
+```
+
+#### Direct Script Execution
+
+Alternatively, run the script directly:
 
 ```bash
 ./extract_frames.py -d 20260117_153206

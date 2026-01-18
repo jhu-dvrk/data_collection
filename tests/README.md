@@ -37,7 +37,7 @@ A simple ROS2 node that publishes a `std_msgs/Float64` timestamp to `/test_topic
 
 ### 2. Test Configuration ([capture_config.json](capture_config.json))
 A complete configuration file for testing. It includes:
-*   A video pipeline with a burned-in clock (`timeoverlay`).
+*   A video stream with a burned-in clock (`timeoverlay`).
 *   Subscription to `/test_topic`.
 
 ### 3. Timestamp Verifier ([check_timestamps.py](check_timestamps.py))

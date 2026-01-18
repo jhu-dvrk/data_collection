@@ -3,6 +3,13 @@
     "title": "Video Recorder Configuration",
     "type": "object",
     "properties": {
+        "configuration_files": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "List of additional configuration files to load and merge. Paths are resolved relative to the current config file's directory, with fallback to the master config file's directory."
+        },
         "data_directory": {
             "type": "string",
             "description": "Directory where recorded videos will be saved"
@@ -21,7 +28,7 @@
             },
             "description": "Optional list of stages to sequence recordings"
         },
-        "pipelines": {
+        "videos": {
             "type": "array",
             "items": {
                 "type": "object",
@@ -32,7 +39,7 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Name of the pipeline"
+                        "description": "Name of the video stream"
                     },
                     "stream": {
                         "type": "string",
@@ -85,6 +92,6 @@
         }
     },
     "required": [
-        "pipelines"
+        "videos"
     ]
 }
