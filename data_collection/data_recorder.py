@@ -20,9 +20,10 @@ from rclpy.qos import QoSProfile, DurabilityPolicy
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QGridLayout, QLabel, QCheckBox,
                              QLineEdit, QFileDialog, QSizePolicy, QOpenGLWidget, QMessageBox,
-                             QListWidget)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QRect
+                             QListWidget, QProgressBar, QGroupBox)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QRect, QUrl, QIODevice
 from PyQt5.QtGui import QImage, QPixmap, QPainter
+from PyQt5.QtMultimedia import QAudioRecorder, QAudioEncoderSettings, QMultimedia, QAudioInput, QAudioFormat, QAudioDeviceInfo
 
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
@@ -300,6 +301,110 @@ class VideoThread(QThread):
         self.rec_requested = recording
         self.stage_name = stage_name
 
+class AudioLevelMeter(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setOrientation(Qt.Horizontal)
+        self.bar.setFixedWidth(100)
+        self.bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid grey;
+                border-radius: 2px;
+                background-color: #EEE;
+            }
+            QProgressBar::chunk {
+                background-color: #00cc00;
+            }
+        """)
+        
+        self.layout.addWidget(QLabel("Mic:"))
+        self.layout.addWidget(self.bar)
+
+        self.audio_input = None
+        self.device = None
+        self.init_audio()
+    
+    def init_audio(self):
+        format = QAudioFormat()
+        format.setSampleRate(8000)
+        format.setChannelCount(1)
+        format.setSampleSize(16)
+        format.setCodec("audio/pcm")
+        format.setByteOrder(QAudioFormat.LittleEndian)
+        format.setSampleType(QAudioFormat.SignedInt)
+
+        info = QAudioDeviceInfo.defaultInputDevice()
+        if not info.isFormatSupported(format):
+            format = info.nearestFormat(format)
+
+        self.audio_input = QAudioInput(info, format)
+        self.device = self.audio_input.start()
+        self.device.readyRead.connect(self.process_audio)
+
+    def process_audio(self):
+        if not self.audio_input:
+            return
+            
+        bytes_ready = self.audio_input.bytesReady()
+        if bytes_ready:
+            data = self.device.read(bytes_ready)
+            # Calculate RMS amplitude
+            # Convert bytes to 16-bit integers
+            samples = np.frombuffer(data, dtype=np.int16)
+            if len(samples) > 0:
+                # Simple peak or rms
+                rms = np.sqrt(np.mean(samples.astype(np.float32)**2))
+                # Normalize to 0-100 (assuming 16-bit max is 32768)
+                # Use log scale for better visualization
+                # db = 20 * log10(rms / 32768)
+                # Let's map 0 to 32768 to 0-100 linearly for simplicity first, or close
+                val = min(100, int((rms / 10000) * 100)) # Gain factor
+                self.bar.setValue(val)
+
+
+class AudioRecorder:
+    def __init__(self):
+        self.recorder = None
+
+    def start(self, filepath):
+        self.recorder = QAudioRecorder()
+        
+        # Configure for WAV recording (PCM)
+        settings = QAudioEncoderSettings()
+        settings.setCodec("audio/pcm")
+        settings.setQuality(QMultimedia.HighQuality)
+        
+        self.recorder.setEncodingSettings(settings)
+        
+        # Set container format explicitly to WAV
+        # On Linux/GStreamer backend this corresponds to wavenc
+        self.recorder.setContainerFormat("audio/x-wav") 
+        
+        # Ensure absolute path
+        abs_path = os.path.abspath(filepath)
+        self.recorder.setOutputLocation(QUrl.fromLocalFile(abs_path))
+        
+        # Start
+        self.recorder.record()
+        
+        # Check for immediate errors
+        if self.recorder.error() != QAudioRecorder.NoError:
+             print(f"Error starting audio recording: {self.recorder.errorString()}")
+        else:
+             print(f"Starting audio recording (Qt): {abs_path}")
+
+    def stop(self):
+        if self.recorder:
+            print("Stopping audio recording (Qt)...")
+            self.recorder.stop()
+            self.recorder = None
+
 
 class VideoPopupWindow(QOpenGLWidget):
     closed = pyqtSignal()
@@ -427,6 +532,8 @@ class RecorderWindow(QMainWindow):
         self.last_bag_duration = 0.0
         self.last_bag_message_count = 0
         self.ignore_rosbag_warnings = False
+        
+        self.audio_recorder = AudioRecorder()
 
         # ROS2 Setup
         self.ros_node = None
@@ -451,11 +558,12 @@ class RecorderWindow(QMainWindow):
         # UI Setup
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        main_layout = QVBoxLayout(central_widget)
         
-        # Directory Selection
+        # --- Box 1: Data Directory ---
+        grp_directory = QGroupBox("Data Directory")
         dir_layout = QHBoxLayout()
-        dir_layout.addWidget(QLabel("Data Directory:"))
+        
         self.txt_directory = QLineEdit(self.base_dir)
         self.txt_directory.setReadOnly(True)
         dir_layout.addWidget(self.txt_directory)
@@ -464,14 +572,32 @@ class RecorderWindow(QMainWindow):
         self.btn_browse.clicked.connect(self.browse_directory)
         dir_layout.addWidget(self.btn_browse)
         
-        layout.addLayout(dir_layout)
+        grp_directory.setLayout(dir_layout)
+        main_layout.addWidget(grp_directory)
         
-        # Middle Part: Videos on left, Stages on right
-        content_layout = QHBoxLayout()
+        # --- Box 2: Audio Settings ---
+        grp_audio = QGroupBox("Audio Settings")
+        audio_layout = QHBoxLayout()
+        
+        self.chk_audio = QCheckBox("Record Audio (Default Mic)")
+        self.chk_audio.setToolTip("Creates a separate 'audio_<timestamp>.wav' file.")
+        audio_layout.addWidget(self.chk_audio)
+        
+        # Audio Meter
+        self.audio_meter = AudioLevelMeter()
+        audio_layout.addWidget(self.audio_meter)
+        
+        audio_layout.addStretch()
+        grp_audio.setLayout(audio_layout)
+        main_layout.addWidget(grp_audio)
+
+        # --- Box 3: Video Streams ---
+        grp_video = QGroupBox("Video Streams")
+        video_layout = QHBoxLayout()
 
         # Grid for videos
         self.grid_layout = QGridLayout()
-        content_layout.addLayout(self.grid_layout, 4) # Give more weight to videos
+        video_layout.addLayout(self.grid_layout, 4) # Give more weight to videos
         
         # Stages list
         self.list_stages = QListWidget()
@@ -484,28 +610,32 @@ class RecorderWindow(QMainWindow):
             self.list_stages.setCurrentRow(0)
             self.list_stages.setFixedWidth(150)
             stages_layout.addWidget(self.list_stages)
-            content_layout.addWidget(stages_container)
+            video_layout.addWidget(stages_container)
         
-        layout.addLayout(content_layout, 1)
+        grp_video.setLayout(video_layout)
+        main_layout.addWidget(grp_video, 1) # This box expands
         
-        # Bottom bar for Controls and Quit
-        bottom_layout = QHBoxLayout()
+        # --- Box 4: Controls ---
+        grp_controls = QGroupBox("Controls")
+        controls_layout = QHBoxLayout()
         
         self.btn_record = QPushButton("Start Recording")
         self.btn_record.setMinimumWidth(200)
         self.btn_record.clicked.connect(self.toggle_recording)
-        bottom_layout.addWidget(self.btn_record)
+        controls_layout.addWidget(self.btn_record)
         
         self.lbl_bag_status = QLabel("Rosbag: Idle")
         self.lbl_bag_status.setStyleSheet("color: gray; margin-left: 10px;")
-        bottom_layout.addWidget(self.lbl_bag_status)
+        controls_layout.addWidget(self.lbl_bag_status)
         
-        bottom_layout.addStretch()
+        controls_layout.addStretch()
         
         self.btn_quit = QPushButton("Quit")
         self.btn_quit.clicked.connect(self.close)
-        bottom_layout.addWidget(self.btn_quit)
-        layout.addLayout(bottom_layout)
+        controls_layout.addWidget(self.btn_quit)
+        
+        grp_controls.setLayout(controls_layout)
+        main_layout.addWidget(grp_controls)
         
         self.init_videos()
         self.update_record_button_state()
@@ -934,6 +1064,7 @@ class RecorderWindow(QMainWindow):
             # Start
             self.btn_browse.setEnabled(False)
             self.list_stages.setEnabled(False)
+            self.chk_audio.setEnabled(False)
             
             # Create a subdirectory based on the date and time
             stage_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -957,6 +1088,12 @@ class RecorderWindow(QMainWindow):
             
             # Set current_stage_dir after potential fallback
             self.current_stage_dir = stage_dir
+
+            # Start Audio Recorder if enabled
+            if self.chk_audio.isChecked():
+                audio_filename = f"audio_{stage_timestamp}.wav"
+                audio_path = os.path.join(stage_dir, audio_filename)
+                self.audio_recorder.start(audio_path)
 
             # Start ROS Bag first (can be slow to initialize)
             ros_topics = self.config.get("ros_topics", [])
@@ -998,6 +1135,9 @@ class RecorderWindow(QMainWindow):
             self.btn_record.setStyleSheet("background-color: red; color: white;")
             self.is_recording = True
         else:
+            # Stop Audio
+            self.audio_recorder.stop()
+
             # Stop
             for th, chk in self.threads:
                 th.set_recording(False, self.base_dir)
@@ -1030,6 +1170,7 @@ class RecorderWindow(QMainWindow):
             self.is_recording = False
             self.btn_browse.setEnabled(True)
             self.list_stages.setEnabled(True)
+            self.chk_audio.setEnabled(True)
             
             # Advance to next stage (restart if at end)
             current_row = self.list_stages.currentRow()

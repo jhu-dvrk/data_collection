@@ -14,7 +14,7 @@ The application also integrates with ROS2 for remote control and status monitori
 *   **System Tools**: `gst-inspect-1.0` (required for hardware encoder discovery)
 *   **System Packages**:
     ```bash
-    sudo apt install python3-opencv python3-numpy python3-pyqt5
+    sudo apt install python3-opencv python3-numpy python3-pyqt5 python3-pyqt5.qtmultimedia libqt5multimedia5-plugins
     ```
 
 ## NVIDIA Hardware Acceleration
