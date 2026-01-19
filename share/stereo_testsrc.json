@@ -16,6 +16,8 @@
       "name": "stereo1",
       "stream": "videotestsrc pattern=ball ! capsfilter caps=video/x-raw,width=320,height=240 ! mix.sink_0 videotestsrc pattern=smpte ! capsfilter caps=video/x-raw,width=320,height=240 ! mix.sink_1 compositor name=mix sink_0::xpos=0 sink_1::xpos=320 ! capsfilter caps=video/x-raw,width=640,height=240",
       "record": true,
+      "tee_glimage_sink": true,
+      "time_watermark": true,
       "recording_options": {
         "encoding": {
           "bitrate": 500000,

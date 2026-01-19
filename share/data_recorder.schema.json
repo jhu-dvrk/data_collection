@@ -60,6 +60,11 @@
                         "description": "Whether to burn GStreamer timestamps into the video by default",
                         "default": false
                     },
+                    "tee_glimage_sink": {
+                        "type": "boolean",
+                        "description": "Whether to add a separate glimagesink window before time overlays (useful for fullscreen preview without watermarks)",
+                        "default": false
+                    },
                     "encoding": {
                         "type": "object",
                         "properties": {

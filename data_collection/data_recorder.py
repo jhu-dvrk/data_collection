@@ -9,6 +9,7 @@ import numpy as np
 import time
 import subprocess
 import signal
+import shutil
 import rosbag2_py
 
 import rclpy
@@ -90,89 +91,154 @@ class VideoThread(QThread):
         self.frame_timestamps = []
         self.rec_start_epoch = None
         self.rec_start_gst = None
+        
+        # Performance tracking
+        self.frame_count = 0
+        self.dropped_frames = 0
+        self.last_frame_time = None
+        self.fps_actual = 0.0
+        self.fps_samples = []
+
+    def _create_capture_pipeline(self):
+        """Create and open the GStreamer capture pipeline.
+        
+        Returns:
+            cv2.VideoCapture object if successful, None otherwise
+        """
+        source_str = self.video_config.get('stream')
+        if not source_str:
+            print(f"Error: No stream defined for video '{self.name}'")
+            return None
+        
+        # Tee for glimagesink (before overlays)
+        tee_glimage_sink = self.video_config.get('tee_glimage_sink', False)
+        tee_str = ""
+        if tee_glimage_sink:
+            tee_str = (
+                " ! tee name=preview_tee "
+                "preview_tee. ! queue ! glimagesink force-aspect-ratio=false "
+                "preview_tee. ! queue "
+            )
+        
+        # Overlay Pipeline: Add black strip and timestamps
+        # videobox: adds 30px height to bottom (negative value adds border)
+        overlay_str = ""
+        if self.time_watermark:
+            overlay_str = (
+                " ! videobox bottom=-30 "
+                " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" ypad=6 "
+                " ! clockoverlay time-format=\"%Y-%m-%d %H:%M:%S\" valignment=bottom halignment=right font-desc=\"Sans, 10\" ypad=6 "
+            )
+
+        # Construct GStreamer video pipeline for OpenCV capture
+        # We need BGR frames for OpenCV
+        if "appsink" not in source_str:
+            read_video_pipeline = f"{source_str} {tee_str} {overlay_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
+        else:
+            read_video_pipeline = source_str
+
+        # Note: We must specify cv2.CAP_GSTREAMER to force GStreamer backend
+        cap = cv2.VideoCapture(read_video_pipeline, cv2.CAP_GSTREAMER)
+
+        if not cap.isOpened():
+            print(f"Error: Could not open video '{self.name}'")
+            return None
+
+        # Attempt to get stream properties
+        gst_fps = cap.get(cv2.CAP_PROP_FPS)
+        if gst_fps > 0:
+            self.fps = gst_fps
+        
+        return cap
+
+    def _process_frame_loop(self, cap):
+        """Process frames from the capture device.
+        
+        Args:
+            cap: OpenCV VideoCapture object
+            
+        Returns:
+            True if should restart capture, False if should exit
+        """
+        while self._run_flag and not self._restart_cap:
+            # Only read from video if somebody needs it (recording, preview)
+            # We also check rec_requested so we can start recording even if no preview
+            if self.rec_requested or self.is_recording or self.preview_enabled:
+                ret, cv_img = cap.read()
+                if ret:
+                    # Track frame performance
+                    self.frame_count += 1
+                    current_time = time.time()
+                    if self.last_frame_time is not None:
+                        frame_delta = current_time - self.last_frame_time
+                        if frame_delta > 0:
+                            instant_fps = 1.0 / frame_delta
+                            self.fps_samples.append(instant_fps)
+                            # Keep last 30 samples for rolling average
+                            if len(self.fps_samples) > 30:
+                                self.fps_samples.pop(0)
+                            self.fps_actual = np.mean(self.fps_samples)
+                    self.last_frame_time = current_time
+                    
+                    h, w, ch = cv_img.shape
+                    self.width = w
+                    self.height = h
+                    
+                    # Get timestamp from GStreamer source (milliseconds)
+                    ts = cap.get(cv2.CAP_PROP_POS_MSEC)
+                    
+                    # Fallback to system time if GStreamer cannot provide position (common for live streams)
+                    if ts <= 0:
+                        ts = time.time() * 1000.0
+
+                    # Handle Recording State Changes (using clean frame)
+                    self._handle_recording(cv_img, ts)
+
+                    # Add blinking red circle if recording
+                    if self.writer:
+                        # Blink every 0.5 seconds (on/off cycle 1 sec)
+                        if int(time.time() * 2) % 2 == 0:
+                            # Draw red circle (BGR: 0, 0, 255) at top-left
+                            cv2.circle(cv_img, (30, 30), 10, (0, 0, 255), -1)
+
+                    if self.preview_enabled:
+                        self.change_pixmap_signal.emit(cv_img)
+                else:
+                    # Loop ended or error - count as dropped frame
+                    self.dropped_frames += 1
+                    # Short sleep to avoid busy loop if error persists
+                    self.msleep(10)
+            else:
+                # No one needs the frame, avoid conversion by not calling cap.read()
+                self.msleep(100)
+        
+        # Return True if restart requested, False otherwise
+        return self._restart_cap
 
     def run(self):
+        """Main thread loop - handles capture lifecycle with automatic restart."""
         while self._run_flag:
-            # Support only 'stream' key
-            source_str = self.video_config.get('stream')
-            if not source_str:
-                print(f"Error: No stream defined for video '{self.name}'")
-                return
-            
-            # Overlay Pipeline: Add black strip and timestamps
-            # videobox: adds 30px height to bottom (negative value adds border)
-            overlay_str = ""
-            if self.time_watermark:
-                overlay_str = (
-                    " ! videobox bottom=-30 "
-                    " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" ypad=6 "
-                    " ! clockoverlay time-format=\"%Y-%m-%d %H:%M:%S\" valignment=bottom halignment=right font-desc=\"Sans, 10\" ypad=6 "
-                )
-
-            # Construct GStreamer video pipeline for OpenCV capture
-            # We need BGR frames for OpenCV
-            if "appsink" not in source_str:
-                read_video_pipeline = f"{source_str} {overlay_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
-            else:
-                read_video_pipeline = source_str
-
-            # Note: We must specify cv2.CAP_GSTREAMER to force GStreamer backend
-            cap = cv2.VideoCapture(read_video_pipeline, cv2.CAP_GSTREAMER)
-
-            if not cap.isOpened():
-                print(f"Error: Could not open video '{self.name}'")
+            # Create capture pipeline
+            cap = self._create_capture_pipeline()
+            if cap is None:
                 # Wait before retrying
                 self.msleep(1000)
                 continue
-
-            # Attempt to get stream properties
-            gst_fps = cap.get(cv2.CAP_PROP_FPS)
-            if gst_fps > 0:
-                self.fps = gst_fps
             
+            # Reset restart flag
             self._restart_cap = False
-            while self._run_flag and not self._restart_cap:
-                # Only read from video if somebody needs it (recording, preview)
-                # We also check rec_requested so we can start recording even if no preview
-                if self.rec_requested or self.is_recording or self.preview_enabled:
-                    ret, cv_img = cap.read()
-                    if ret:
-                        h, w, ch = cv_img.shape
-                        self.width = w
-                        self.height = h
-                        
-                        # Get timestamp from GStreamer source (milliseconds)
-                        ts = cap.get(cv2.CAP_PROP_POS_MSEC)
-                        
-                        # Fallback to system time if GStreamer cannot provide position (common for live streams)
-                        if ts <= 0:
-                            ts = time.time() * 1000.0
-
-                        # Handle Recording State Changes (using clean frame)
-                        self._handle_recording(cv_img, ts)
-
-                        # Add blinking red circle if recording
-                        if self.writer:
-                            # Blink every 0.5 seconds (on/off cycle 1 sec)
-                            if int(time.time() * 2) % 2 == 0:
-                                # Draw red circle (BGR: 0, 0, 255) at top-left
-                                cv2.circle(cv_img, (30, 30), 10, (0, 0, 255), -1)
-
-                        if self.preview_enabled:
-                            self.change_pixmap_signal.emit(cv_img)
-                    else:
-                        # Loop ended or error
-                        # Short sleep to avoid busy loop if error persists
-                        self.msleep(10)
-                        # Maybe break and restart cap if permanent failure? 
-                        # For now just msleep.
-                else:
-                    # No one needs the frame, avoid conversion by not calling cap.read()
-                    self.msleep(100)
-
-            # Cleanup capture before restart or stop
+            
+            # Process frames until restart or exit
+            should_restart = self._process_frame_loop(cap)
+            
+            # Cleanup capture
             cap.release()
             
+            # Exit if not restarting
+            if not should_restart:
+                break
+        
+        # Final cleanup
         self._stop_writer()
             
     def _handle_recording(self, frame, timestamp):
@@ -329,7 +395,8 @@ class AudioLevelMeter(QWidget):
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
         self.bar.setOrientation(Qt.Horizontal)
-        self.bar.setFixedWidth(100)
+        self.bar.setFixedWidth(200)
+        self.bar.setFixedHeight(12)
         self.bar.setStyleSheet("""
             QProgressBar {
                 border: 1px solid grey;
@@ -428,6 +495,7 @@ class VideoWidget(QOpenGLWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         self.current_image = None
         self.preview_enabled = True
@@ -518,6 +586,11 @@ class RecorderWindow(QMainWindow):
         self.btn_browse = QPushButton("Browse...")
         self.btn_browse.clicked.connect(self.browse_directory)
         dir_layout.addWidget(self.btn_browse)
+        
+        # Disk space indicator
+        self.lbl_disk_space = QLabel("Disk: Checking...")
+        self.lbl_disk_space.setStyleSheet("color: gray; margin-left: 10px;")
+        dir_layout.addWidget(self.lbl_disk_space)
         
         grp_directory.setLayout(dir_layout)
         main_layout.addWidget(grp_directory)
@@ -695,6 +768,47 @@ class RecorderWindow(QMainWindow):
              else:
                  self.lbl_bag_status.setText("Rosbag: Disabled")
                  self.lbl_bag_status.setStyleSheet("color: gray; margin-left: 10px;")
+        
+        # Update disk space indicator
+        free_gb = self.get_disk_space(self.base_dir)
+        if free_gb is not None:
+            if free_gb < 1.0:
+                # Critical - red
+                self.lbl_disk_space.setText(f"Disk: {free_gb:.1f} GB (CRITICAL!)")
+                self.lbl_disk_space.setStyleSheet("color: red; font-weight: bold; margin-left: 10px;")
+                # Auto-stop recording if critically low
+                if self.is_recording:
+                    print(f"WARNING: Critically low disk space ({free_gb:.1f} GB). Stopping recording.")
+                    self.toggle_recording()
+            elif free_gb < 5.0:
+                # Warning - orange
+                self.lbl_disk_space.setText(f"Disk: {free_gb:.1f} GB (Low)")
+                self.lbl_disk_space.setStyleSheet("color: orange; font-weight: bold; margin-left: 10px;")
+            else:
+                # OK - green
+                self.lbl_disk_space.setText(f"Disk: {free_gb:.1f} GB")
+                self.lbl_disk_space.setStyleSheet("color: green; margin-left: 10px;")
+        else:
+            self.lbl_disk_space.setText("Disk: Unknown")
+            self.lbl_disk_space.setStyleSheet("color: gray; margin-left: 10px;")
+        
+        # Update performance stats for each video stream
+        for entry in self.threads:
+            th = entry['thread']
+            lbl_stats = entry['lbl_stats']
+            
+            fps_str = f"{th.fps_actual:.1f}" if th.fps_actual > 0 else "--"
+            stats_text = f"FPS: {fps_str} | Frames: {th.frame_count} | Dropped: {th.dropped_frames}"
+            
+            # Color code based on dropped frames
+            if th.dropped_frames == 0:
+                lbl_stats.setStyleSheet("color: green;")
+            elif th.dropped_frames < 10:
+                lbl_stats.setStyleSheet("color: orange;")
+            else:
+                lbl_stats.setStyleSheet("color: red;")
+            
+            lbl_stats.setText(stats_text)
 
     def ros_record_callback(self, msg):
         should_record = msg.data
@@ -718,6 +832,15 @@ class RecorderWindow(QMainWindow):
                     self.toggle_recording()
         except Exception as e:
             print(f"Error in joy callback: {e}")
+
+    def get_disk_space(self, path):
+        """Get available disk space in GB for the given path."""
+        try:
+            stat = shutil.disk_usage(path)
+            return stat.free / (1024**3)  # Convert to GB
+        except Exception as e:
+            print(f"Error checking disk space: {e}")
+            return None
 
     def browse_directory(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Data Directory", self.base_dir)
@@ -867,8 +990,12 @@ class RecorderWindow(QMainWindow):
 
             # Video Widget
             vw = VideoWidget()
-            vw.setMinimumSize(320, 240)
             self.video_widgets.append(vw)
+            
+            # Performance stats label
+            lbl_stats = QLabel("FPS: -- | Frames: 0 | Dropped: 0")
+            lbl_stats.setStyleSheet("color: gray;")
+            lbl_stats.setAlignment(Qt.AlignLeft)
 
             # Thread
             th = VideoThread(p_config)
@@ -879,7 +1006,8 @@ class RecorderWindow(QMainWindow):
             self.threads.append({
                 'thread': th,
                 'chk_record': chk_record,
-                'chk_watermark': chk_watermark
+                'chk_watermark': chk_watermark,
+                'lbl_stats': lbl_stats
             })
 
             # Connect checkboxes
@@ -898,10 +1026,12 @@ class RecorderWindow(QMainWindow):
             # Container
             v_layout = QVBoxLayout()
             v_layout.addLayout(header_layout)
-            v_layout.addWidget(vw)
+            v_layout.addWidget(vw, 1)  # Stretch factor of 1 to expand
+            v_layout.addWidget(lbl_stats)
             
             container = QWidget()
             container.setLayout(v_layout)
+            container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.grid_layout.addWidget(container, row, col)
             
             # Update button state when checkbox toggled
@@ -1019,6 +1149,30 @@ class RecorderWindow(QMainWindow):
 
     def toggle_recording(self):
         if not self.is_recording:
+            # Check disk space before starting
+            free_gb = self.get_disk_space(self.base_dir)
+            if free_gb is not None:
+                if free_gb < 1.0:
+                    QMessageBox.critical(
+                        self,
+                        "Insufficient Disk Space",
+                        f"Cannot start recording. Only {free_gb:.2f} GB available.\n\n"
+                        "Please free up disk space or select a different directory."
+                    )
+                    return
+                elif free_gb < 5.0:
+                    reply = QMessageBox.warning(
+                        self,
+                        "Low Disk Space",
+                        f"Warning: Only {free_gb:.2f} GB available.\n\n"
+                        "Recording may fail if session is long.\n\n"
+                        "Continue anyway?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
+                    )
+                    if reply != QMessageBox.Yes:
+                        return
+            
             # Start
             self.btn_browse.setEnabled(False)
             self.list_stages.setEnabled(False)
