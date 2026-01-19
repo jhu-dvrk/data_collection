@@ -37,6 +37,7 @@ class VideoThread(QThread):
         # Priority list of encoders: NVENC, VAAPI, software (x264)
         # We test availability using gst-inspect-1.0
         encoders = [
+            ("nvh264enc", "nvh264enc bitrate={bitrate_kb} ! h264parse"),
             ("nvv4l2h264enc", "nvv4l2h264enc bitrate={bitrate} preset-level=4 control-rate=1 ! h264parse"),
             ("vaapih264enc", "vaapih264enc bitrate={bitrate_kb} ! h264parse"),
             ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
