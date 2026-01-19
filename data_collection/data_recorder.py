@@ -110,13 +110,23 @@ class VideoThread(QThread):
             print(f"Error: No stream defined for video '{self.name}'")
             return None
         
-        # Tee for glimagesink (before overlays)
+        # Tee for video sink (before overlays)
         tee_glimage_sink = self.video_config.get('tee_glimage_sink', False)
         tee_str = ""
         if tee_glimage_sink:
+            # Auto-detect display server: waylandsink for Wayland, glimagesink for X11
+            import os
+            session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
+            wayland_display = os.environ.get('WAYLAND_DISPLAY', '')
+            
+            if session_type == 'wayland' or wayland_display:
+                video_sink = "waylandsink"
+            else:
+                video_sink = "glimagesink force-aspect-ratio=false"
+            
             tee_str = (
                 " ! tee name=preview_tee "
-                "preview_tee. ! queue ! glimagesink force-aspect-ratio=false "
+                f"preview_tee. ! queue ! {video_sink} "
                 "preview_tee. ! queue "
             )
         
