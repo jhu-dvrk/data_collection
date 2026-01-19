@@ -114,13 +114,13 @@ class VideoThread(QThread):
         tee_glimage_sink = self.video_config.get('tee_glimage_sink', False)
         tee_str = ""
         if tee_glimage_sink:
-            # Auto-detect display server: waylandsink for Wayland, glimagesink for X11
+            # Auto-detect display server: qmlglsink for Wayland, glimagesink for X11
             import os
             session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
             wayland_display = os.environ.get('WAYLAND_DISPLAY', '')
             
             if session_type == 'wayland' or wayland_display:
-                video_sink = "waylandsink"
+                video_sink = "qmlglsink force-aspect-ratio=false"
             else:
                 video_sink = "glimagesink force-aspect-ratio=false"
             

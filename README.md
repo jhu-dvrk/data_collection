@@ -7,14 +7,9 @@ The application also integrates with ROS2 for remote control and status monitori
 ## Prerequisites
 
 *   **ROS2**: The application is a ROS2 node and requires a working ROS2 installation (Humble, Jazzy, etc.).
-*   **GStreamer 1.0**:
+*   **System Dependencies**:
     ```bash
-    sudo apt install libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools
-    ```
-*   **System Tools**: `gst-inspect-1.0` (required for hardware encoder discovery)
-*   **System Packages**:
-    ```bash
-    sudo apt install python3-opencv python3-numpy python3-pyqt5 python3-pyqt5.qtmultimedia libqt5multimedia5-plugins
+    sudo apt install libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-plugins-base-apps python3-opencv python3-numpy python3-pyqt5 python3-pyqt5.qtmultimedia libqt5multimedia5-plugins qmlglsink
     ```
 
 ## NVIDIA Hardware Acceleration
