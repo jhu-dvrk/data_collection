@@ -59,6 +59,7 @@ Define your video sources in a JSON file. The configuration format is defined in
 ```json
 {
   "data_directory": "data",
+  "record_audio": true,
   "ros_topics": [ 
     "/PSM1/measured_cp",
     "/PSM1/measured_cv",
@@ -74,7 +75,7 @@ Define your video sources in a JSON file. The configuration format is defined in
       "name": "camera_1",
       "stream": "v4l2src device=/dev/video0 ! video/x-raw,width=640,height=480,framerate=30/1",
       "record": true,
-      "popup": true,
+      "time_watermark": true,
       "encoding": {
         "width": 320,
         "height": 240,
@@ -85,7 +86,7 @@ Define your video sources in a JSON file. The configuration format is defined in
       "name": "test_pattern",
       "stream": "videotestsrc pattern=smpte75",
       "record": false,
-      "popup": false
+      "time_watermark": false
     }
   ]
 }
