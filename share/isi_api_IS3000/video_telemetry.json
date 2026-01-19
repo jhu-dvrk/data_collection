@@ -1,7 +1,7 @@
 {
   "data_directory": "data",
   "configuration_files": [
-    "../decklink_stereo_gooviz.json",
+    "../decklink_stereo_1920_540.json",
     "console.json",
     "MTML1.json",
     "MTMR1.json",

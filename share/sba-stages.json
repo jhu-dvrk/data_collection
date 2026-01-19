@@ -1,0 +1,16 @@
+{
+  "stages": [
+      "lift_right_enteronomy",
+      "insert_cartridge_10mm",
+      "lift_left_enteronomy",
+      "insert_anvil_10mm",
+      "grab_stay_stitch",
+      "insert_stapler_to_crotch",
+      "common_enteronomy_staple",
+      "remove_stapler",
+      "lift_stay_stitch",
+      "close_enteronomy",
+      "closure_enteronomy_stapler",
+      "release_everything"
+  ]
+}
