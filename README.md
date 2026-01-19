@@ -120,8 +120,6 @@ This approach enables modular configurations where you can maintain separate fil
 
 ### 2. Running the Recorder
 
-#### Option A: Using ros2 run (Recommended)
-
 After building your workspace, run the recorder using `ros2 run`:
 
 ```bash
@@ -135,20 +133,6 @@ ros2 run data_collection data_recorder -c PSM1.json -c PSM2.json -c SUJ.json -c 
 ```
 
 **Note**: Configuration file paths can be relative to your current working directory or absolute paths.
-
-#### Option B: Direct Script Execution
-
-Alternatively, run the script directly:
-
-```bash
-./data_recorder.py -c config.json
-```
-
-Multiple configuration files:
-
-```bash
-./data_recorder.py -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
-```
 
 ### 3. Stages Feature
 
@@ -168,8 +152,6 @@ The `extract_frames.py` script identifies all data in a session directory and:
 1.  Extracts individual frames from all recorded `.mp4` files using sidecar `.json` nanosecond timestamps.
 2.  Converts all recorded ROS bag topics into individual `.csv` files.
 
-#### Using ros2 run (Recommended)
-
 To process a recorded session directory:
 
 ```bash
@@ -182,19 +164,20 @@ To list the videos in a session without processing:
 ros2 run data_collection extract_frames -d 20260117_153206 -l
 ```
 
-#### Direct Script Execution
+### 5. Synchronization Verification
 
-Alternatively, run the script directly:
-
-```bash
-./extract_frames.py -d 20260117_153206
-```
-
-To list the videos in a session without processing:
+The `check_timestamps.py` script verifies the synchronization between the recording's filenames (based on system time) and the burned-in GStreamer timestamps. It uses Tesseract OCR to read the "Time watermark" strip.
 
 ```bash
-./extract_frames.py -d 20260117_153206 -l
+ros2 run data_collection check_timestamps -d 20260117_153206/extracted
 ```
+
+**Key Features**:
+- **Automatic ROI**: Specifically targets the bottom 30px black watermark strip for speed and accuracy.
+- **Latency Analysis**: Calculates the average difference between system capture time and the video's internal clock.
+- **Jitter Measurement**: Calculates the standard deviation of latency across all frames.
+- **Transition Detection**: Identifies frame boundaries where the integer second changes to estimate sub-second precision.
+- **Validation**: Filters out OCR misreads and handles logical day-wrapping.
 
 ## ROS2 Integration
 

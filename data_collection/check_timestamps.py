@@ -42,11 +42,15 @@ def parse_gst_time(time_str):
         if len(parts) == 3:
             hours = int(parts[0])
             minutes = int(parts[1])
+            if minutes >= 60:
+                return None
             
             # Handle seconds
             if '.' in parts[2]:
                 sec_parts = parts[2].split('.')
                 seconds = int(sec_parts[0])
+                if seconds >= 60:
+                    return None
                 ns_str = sec_parts[1]
                 # Keep digits only for fraction
                 ns_str = ''.join(filter(str.isdigit, ns_str))
@@ -54,6 +58,8 @@ def parse_gst_time(time_str):
                 return hours * 3600 + minutes * 60 + seconds + ns
             else:
                 seconds = float(parts[2])
+                if seconds >= 60:
+                    return None
                 return hours * 3600 + minutes * 60 + seconds
     except Exception:
         # print(f"Debug: Failed to parse '{time_str}'")
@@ -100,16 +106,16 @@ def process_single_frame(args):
         return idx, None, None, None, None, file_ts
     
     h, w = img.shape[:2]
-    mid_y = h // 2
+    strip_height = 30
+    strip_start_y = h - strip_height
+    mid_x = w // 2
     
-    # --- Top Half: Relative Time (Running Time) ---
-    # Top bbox is relative to Top Half
+    # --- Bottom-Left: Relative Time (Running Time) ---
+    # top_bbox is relative to the left half of the bottom strip
     if top_bbox:
         tx1, ty1, tx2, ty2 = top_bbox
-        # Slicing: img[:mid_y][ty1:ty2, tx1:tx2] is correct
-        roi_top = img[ty1:ty2, tx1:tx2]
+        roi_top = img[strip_start_y + ty1 : strip_start_y + ty2, tx1 : tx2]
     else:
-        # Fallback if no bbox provided
         roi_top = None
     
     rel_text = ""
@@ -130,12 +136,11 @@ def process_single_frame(args):
             except Exception:
                 pass
 
-    # --- Bottom Half: Absolute Time (Clock Time) ---
-    # Bottom bbox is relative to Bottom Half
+    # --- Bottom-Right: Absolute Time (Clock Time) ---
+    # bottom_bbox is relative to the right half of the bottom strip
     if bottom_bbox:
         bx1, by1, bx2, by2 = bottom_bbox
-        # Absolute Y in image is mid_y + by1
-        roi_bottom = img[mid_y+by1:mid_y+by2, bx1:bx2]
+        roi_bottom = img[strip_start_y + by1 : strip_start_y + by2, mid_x + bx1 : mid_x + bx2]
     else:
         roi_bottom = None
     
@@ -215,25 +220,30 @@ def verify_frames(frames_dir, num_jobs=None):
         
         if img_0 is not None:
             h, w = img_0.shape[:2]
-            mid_y = h // 2
+            # The watermark is in a 30px strip at the bottom
+            strip_height = 30
+            strip_start_y = h - strip_height
             
-            # Top half
-            img_top = img_0[0:mid_y, :]
-            top_bbox = get_text_bbox(img_top)
+            # Divide strip into left (relative time) and right (clock time)
+            mid_x = w // 2
             
-            # Bottom half
-            img_bottom = img_0[mid_y:, :]
-            bottom_bbox = get_text_bbox(img_bottom)
+            # Left side of strip
+            img_strip_left = img_0[strip_start_y:, 0:mid_x]
+            top_bbox = get_text_bbox(img_strip_left)
+            
+            # Right side of strip
+            img_strip_right = img_0[strip_start_y:, mid_x:]
+            bottom_bbox = get_text_bbox(img_strip_right)
             
             if top_bbox:
-                print(f"  Detected Top BBox: {top_bbox}")
+                print(f"  Detected Relative Time BBox (bottom-left): {top_bbox}")
             else:
-                print("  Warning: Could not detect text in top half of first frame.")
+                print("  Warning: Could not detect relative time in bottom-left strip.")
 
             if bottom_bbox:
-                print(f"  Detected Bottom BBox: {bottom_bbox}")
+                print(f"  Detected Absolute Time BBox (bottom-right): {bottom_bbox}")
             else:
-                print("  Warning: Could not detect text in bottom half of first frame.")
+                print("  Warning: Could not detect absolute time in bottom-right strip.")
 
         # Prepare arguments for parallel processing
         tasks = []
@@ -297,6 +307,12 @@ def verify_frames(frames_dir, num_jobs=None):
             # Calculate difference. 
             diff = file_ts - ocr_ts
             
+            # Sanity check: If OCR is more than 10s away from file TS, it's likely a misread digit
+            if abs(diff) > 10.0:
+                 # Only print if it's not a common day-wrap or similar
+                 # print(f"Frame {idx}: Skipping outlier OCR result (Diff: {diff:.3f}s, OCR: {text})")
+                 continue
+
             # Detect Transition: When OCR integer second changes.
             if prev_abs_time is not None:
                 if ocr_ts != prev_abs_time:
@@ -350,7 +366,7 @@ def verify_frames(frames_dir, num_jobs=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Check synchronization of extracted frames using OCR")
-    parser.add_argument("frames_dir", help="Directory containing extracted frames (named with timestamps)")
+    parser.add_argument("-d", "--dir", dest="frames_dir", required=True, help="Directory containing extracted frames (named with timestamps)")
     parser.add_argument("-j", "--jobs", type=int, help="Number of parallel jobs (default: half of available cores)")
     args = parser.parse_args()
     

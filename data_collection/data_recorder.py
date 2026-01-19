@@ -38,8 +38,8 @@ class VideoThread(QThread):
         # Priority list of encoders: NVENC, VAAPI, software (x264)
         # We test availability using gst-inspect-1.0
         encoders = [
-            ("nvh264enc", "nvh264enc bitrate={bitrate_kb} ! h264parse"),
-            ("nvv4l2h264enc", "nvv4l2h264enc bitrate={bitrate} preset-level=4 control-rate=1 ! h264parse"),
+            ("nvh264enc", "nvh264enc bitrate={bitrate_bits} ! h264parse"),
+            ("nvv4l2h264enc", "nvv4l2h264enc bitrate={bitrate_bits} preset-level=4 control-rate=1 ! h264parse"),
             ("vaapih264enc", "vaapih264enc bitrate={bitrate_kb} ! h264parse"),
             ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
         ]
@@ -78,7 +78,8 @@ class VideoThread(QThread):
         
         # UI state
         self.preview_enabled = True
-        self.popup_enabled = False
+        self.time_watermark = video_config.get('time_watermark', False)
+        self._restart_cap = False
         
         # Stream info
         self.width = 640
@@ -91,70 +92,87 @@ class VideoThread(QThread):
         self.rec_start_gst = None
 
     def run(self):
-        # Support only 'stream' key
-        source_str = self.video_config.get('stream')
-        if not source_str:
-            print(f"Error: No stream defined for video '{self.name}'")
-            return
-        
-        # Construct GStreamer video pipeline for OpenCV capture
-        # We need BGR frames for OpenCV
-        if "appsink" not in source_str:
-            read_video_pipeline = f"{source_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
-        else:
-            read_video_pipeline = source_str
-
-        # Note: We must specify cv2.CAP_GSTREAMER to force GStreamer backend
-        cap = cv2.VideoCapture(read_video_pipeline, cv2.CAP_GSTREAMER)
-
-        if not cap.isOpened():
-            print(f"Error: Could not open video '{self.name}'")
-            return
-
-        # Attempt to get stream properties
-        gst_fps = cap.get(cv2.CAP_PROP_FPS)
-        if gst_fps > 0:
-            self.fps = gst_fps
-        
         while self._run_flag:
-            # Only read from video if somebody needs it (recording, preview, or popup)
-            # We also check rec_requested so we can start recording even if no preview
-            if self.rec_requested or self.is_recording or self.preview_enabled or self.popup_enabled:
-                ret, cv_img = cap.read()
-                if ret:
-                    h, w, ch = cv_img.shape
-                    self.width = w
-                    self.height = h
-                    
-                    # Get timestamp from GStreamer source (milliseconds)
-                    ts = cap.get(cv2.CAP_PROP_POS_MSEC)
-                    
-                    # Fallback to system time if GStreamer cannot provide position (common for live streams)
-                    if ts <= 0:
-                        ts = time.time() * 1000.0
+            # Support only 'stream' key
+            source_str = self.video_config.get('stream')
+            if not source_str:
+                print(f"Error: No stream defined for video '{self.name}'")
+                return
+            
+            # Overlay Pipeline: Add black strip and timestamps
+            # videobox: adds 30px height to bottom (negative value adds border)
+            overlay_str = ""
+            if self.time_watermark:
+                overlay_str = (
+                    " ! videobox bottom=-30 "
+                    " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" ypad=6 "
+                    " ! clockoverlay time-format=\"%Y-%m-%d %H:%M:%S\" valignment=bottom halignment=right font-desc=\"Sans, 10\" ypad=6 "
+                )
 
-                    # Handle Recording State Changes (using clean frame)
-                    self._handle_recording(cv_img, ts)
-
-                    # Add blinking red circle if recording
-                    if self.writer:
-                        # Blink every 0.5 seconds (on/off cycle 1 sec)
-                        if int(time.time() * 2) % 2 == 0:
-                            # Draw red circle (BGR: 0, 0, 255) at top-left
-                            cv2.circle(cv_img, (30, 30), 10, (0, 0, 255), -1)
-
-                    if self.preview_enabled or self.popup_enabled:
-                        self.change_pixmap_signal.emit(cv_img)
-                else:
-                    # Loop ended or error
-                    # Short sleep to avoid busy loop if error persists
-                    self.msleep(10)
+            # Construct GStreamer video pipeline for OpenCV capture
+            # We need BGR frames for OpenCV
+            if "appsink" not in source_str:
+                read_video_pipeline = f"{source_str} {overlay_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
             else:
-                # No one needs the frame, avoid conversion by not calling cap.read()
-                self.msleep(100)
+                read_video_pipeline = source_str
 
-        # Cleanup
-        cap.release()
+            # Note: We must specify cv2.CAP_GSTREAMER to force GStreamer backend
+            cap = cv2.VideoCapture(read_video_pipeline, cv2.CAP_GSTREAMER)
+
+            if not cap.isOpened():
+                print(f"Error: Could not open video '{self.name}'")
+                # Wait before retrying
+                self.msleep(1000)
+                continue
+
+            # Attempt to get stream properties
+            gst_fps = cap.get(cv2.CAP_PROP_FPS)
+            if gst_fps > 0:
+                self.fps = gst_fps
+            
+            self._restart_cap = False
+            while self._run_flag and not self._restart_cap:
+                # Only read from video if somebody needs it (recording, preview)
+                # We also check rec_requested so we can start recording even if no preview
+                if self.rec_requested or self.is_recording or self.preview_enabled:
+                    ret, cv_img = cap.read()
+                    if ret:
+                        h, w, ch = cv_img.shape
+                        self.width = w
+                        self.height = h
+                        
+                        # Get timestamp from GStreamer source (milliseconds)
+                        ts = cap.get(cv2.CAP_PROP_POS_MSEC)
+                        
+                        # Fallback to system time if GStreamer cannot provide position (common for live streams)
+                        if ts <= 0:
+                            ts = time.time() * 1000.0
+
+                        # Handle Recording State Changes (using clean frame)
+                        self._handle_recording(cv_img, ts)
+
+                        # Add blinking red circle if recording
+                        if self.writer:
+                            # Blink every 0.5 seconds (on/off cycle 1 sec)
+                            if int(time.time() * 2) % 2 == 0:
+                                # Draw red circle (BGR: 0, 0, 255) at top-left
+                                cv2.circle(cv_img, (30, 30), 10, (0, 0, 255), -1)
+
+                        if self.preview_enabled:
+                            self.change_pixmap_signal.emit(cv_img)
+                    else:
+                        # Loop ended or error
+                        # Short sleep to avoid busy loop if error persists
+                        self.msleep(10)
+                        # Maybe break and restart cap if permanent failure? 
+                        # For now just msleep.
+                else:
+                    # No one needs the frame, avoid conversion by not calling cap.read()
+                    self.msleep(100)
+
+            # Cleanup capture before restart or stop
+            cap.release()
+            
         self._stop_writer()
             
     def _handle_recording(self, frame, timestamp):
@@ -406,65 +424,11 @@ class AudioRecorder:
             self.recorder = None
 
 
-class VideoPopupWindow(QOpenGLWidget):
-    closed = pyqtSignal()
-
-    def __init__(self, name, parent=None):
-        super().__init__(parent)
-        # Remove window title and add name to tooltip
-        self.setWindowTitle("")
-        self.setToolTip(name + " (Press ESC to close, b to toggle border)")
-        
-        # Ensure the window can be resized
-        self.setMinimumSize(160, 120)
-        
-        self.last_image = None
-        self.resize(800, 600)
-
-    def set_image(self, qt_image):
-        # We store the image. Since it was copied in the widget, it's safe.
-        self.last_image = qt_image
-        self.update()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
-            self.close()
-        elif event.key() == Qt.Key_B:
-            # Toggle window borders
-            if self.windowFlags() & Qt.FramelessWindowHint:
-                self.setWindowFlags(self.windowFlags() & ~Qt.FramelessWindowHint)
-            else:
-                self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
-            self.show() # Need to call show() after changing window flags
-        else:
-            super().keyPressEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), Qt.black)
-        if self.last_image:
-            # Scale rect maintaining aspect ratio
-            img_size = self.last_image.size()
-            img_size.scale(self.size(), Qt.KeepAspectRatio)
-            
-            target = QRect(0, 0, img_size.width(), img_size.height())
-            target.moveCenter(self.rect().center())
-            painter.drawImage(target, self.last_image)
-        painter.end()
-
-    def closeEvent(self, event):
-        self.closed.emit()
-        event.accept()
-
-
 class VideoWidget(QOpenGLWidget):
-    popup_closed = pyqtSignal()
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
         
-        self.popup_window = None
         self.current_image = None
         self.preview_enabled = True
 
@@ -486,10 +450,6 @@ class VideoWidget(QOpenGLWidget):
         # Trigger repaint of this widget (OpenGL) if preview enabled
         if self.preview_enabled:
             self.update()
-        
-        # Update popup if it exists and is visible
-        if self.popup_window and self.popup_window.isVisible():
-            self.popup_window.set_image(self.current_image)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -503,19 +463,6 @@ class VideoWidget(QOpenGLWidget):
             target.moveCenter(self.rect().center())
             painter.drawImage(target, self.current_image)
         painter.end()
-
-    def set_popup_visible(self, visible, name=""):
-        if visible:
-            if not self.popup_window:
-                self.popup_window = VideoPopupWindow(name)
-                self.popup_window.closed.connect(self.on_popup_closed)
-            self.popup_window.show()
-        else:
-            if self.popup_window:
-                self.popup_window.hide()
-
-    def on_popup_closed(self):
-        self.popup_closed.emit()
 
 class RecorderWindow(QMainWindow):
     def __init__(self, config_files, joy_topic=None):
@@ -581,6 +528,7 @@ class RecorderWindow(QMainWindow):
         
         self.chk_audio = QCheckBox("Record Audio (Default Mic)")
         self.chk_audio.setToolTip("Creates a separate 'audio_<timestamp>.wav' file.")
+        self.chk_audio.setChecked(self.config.get("record_audio", False))
         audio_layout.addWidget(self.chk_audio)
         
         # Audio Meter
@@ -642,7 +590,7 @@ class RecorderWindow(QMainWindow):
 
     def update_record_button_state(self):
         # Check if any video is selected for recording
-        any_video_record = any(chk.isChecked() for _, chk in self.threads)
+        any_video_record = any(entry['chk_record'].isChecked() for entry in self.threads)
         
         # Check if any ROS topics are available
         any_ros_topics = len(self.config.get("ros_topics", [])) > 0
@@ -780,6 +728,7 @@ class RecorderWindow(QMainWindow):
     def load_configs(self, paths):
         merged_config = {
             "data_directory": "data",
+            "record_audio": False,
             "videos": [],
             "ros_topics": [],
             "stages": []
@@ -836,6 +785,10 @@ class RecorderWindow(QMainWindow):
                     # Merge data_directory (last one wins)
                     if "data_directory" in cfg:
                         merged_config["data_directory"] = cfg["data_directory"]
+                    
+                    # Merge record_audio (OR)
+                    if "record_audio" in cfg:
+                        merged_config["record_audio"] = merged_config["record_audio"] or bool(cfg["record_audio"])
                     
                     # Merge ros_topics (deduplicated)
                     if "ros_topics" in cfg and isinstance(cfg["ros_topics"], list):
@@ -901,15 +854,15 @@ class RecorderWindow(QMainWindow):
             
             chk_preview = QCheckBox("Preview")
             chk_preview.setChecked(True)
-            chk_popup = QCheckBox("Popup")            
+            chk_watermark = QCheckBox("Time watermark")
             chk_record = QCheckBox("Record")
 
             # Header layout
             header_layout = QHBoxLayout()
             header_layout.addWidget(lbl)
             header_layout.addWidget(chk_record)
+            header_layout.addWidget(chk_watermark)
             header_layout.addWidget(chk_preview)
-            header_layout.addWidget(chk_popup)
             header_layout.addStretch()
 
             # Video Widget
@@ -921,22 +874,26 @@ class RecorderWindow(QMainWindow):
             th = VideoThread(p_config)
             th.change_pixmap_signal.connect(vw.update_image)
             th.start()
-            self.threads.append((th, chk_record))
+            
+            # Store thread and associated control checkboxes
+            self.threads.append({
+                'thread': th,
+                'chk_record': chk_record,
+                'chk_watermark': chk_watermark
+            })
 
             # Connect checkboxes
             chk_preview.toggled.connect(vw.set_preview_enabled)
             chk_preview.toggled.connect(lambda checked, t=th: setattr(t, 'preview_enabled', checked))
-
-            def update_popup(checked, w=vw, t=th, name=stream_name):
-                w.set_popup_visible(checked, name)
-                t.popup_enabled = checked
             
-            chk_popup.toggled.connect(update_popup)
-            vw.popup_closed.connect(lambda c=chk_popup: c.setChecked(False))
+            def toggle_watermark(checked, t=th):
+                t.time_watermark = checked
+                t._restart_cap = True
+            chk_watermark.toggled.connect(toggle_watermark)
 
             # Set initial state from config
             chk_record.setChecked(p_config.get('record', True))
-            chk_popup.setChecked(p_config.get('popup', False))
+            chk_watermark.setChecked(p_config.get('time_watermark', False))
             
             # Container
             v_layout = QVBoxLayout()
@@ -1017,7 +974,8 @@ class RecorderWindow(QMainWindow):
             
         try:
             videos = []
-            for th, _ in self.threads:
+            for entry in self.threads:
+                th = entry['thread']
                 if th.last_video_name:
                     v_duration = 0.0
                     # Compute duration from the sidecar JSON file
@@ -1124,11 +1082,17 @@ class RecorderWindow(QMainWindow):
                     print(f"Failed to start rosbag: {e}")
 
             # Start video recordings
-            for th, chk in self.threads:
-                # Disable checkbox
-                chk.setEnabled(False)
+            for entry in self.threads:
+                th = entry['thread']
+                chk_rec = entry['chk_record']
+                chk_wm = entry['chk_watermark']
+                
+                # Disable checkboxes
+                chk_rec.setEnabled(False)
+                chk_wm.setEnabled(False)
+                
                 # Update record config based on checkbox
-                th.video_config['record'] = chk.isChecked()
+                th.video_config['record'] = chk_rec.isChecked()
                 th.set_recording(True, stage_dir, stage_name)
 
             self.btn_record.setText("Stop Recording")
@@ -1139,9 +1103,14 @@ class RecorderWindow(QMainWindow):
             self.audio_recorder.stop()
 
             # Stop
-            for th, chk in self.threads:
+            for entry in self.threads:
+                th = entry['thread']
+                chk_rec = entry['chk_record']
+                chk_wm = entry['chk_watermark']
+                
                 th.set_recording(False, self.base_dir)
-                chk.setEnabled(True)
+                chk_rec.setEnabled(True)
+                chk_wm.setEnabled(True)
             
             # Stop ROS Bag
             if self.bag_process:
@@ -1160,7 +1129,7 @@ class RecorderWindow(QMainWindow):
             # Wait for all video threads to finish writing files
             wait_start = time.time()
             while time.time() - wait_start < 3.0:
-                any_recording = any(th.is_recording for th, _ in self.threads)
+                any_recording = any(entry['thread'].is_recording for entry in self.threads)
                 if not any_recording:
                     break
                 time.sleep(0.1)
@@ -1189,8 +1158,8 @@ class RecorderWindow(QMainWindow):
 
     def closeEvent(self, event):
         # 1. Signal all threads to stop (without waiting yet)
-        for th, _ in self.threads:
-            th._run_flag = False
+        for entry in self.threads:
+            entry['thread']._run_flag = False
             
         # 2. Stop ROS Bag immediately if recording
         if self.bag_process:
@@ -1201,17 +1170,12 @@ class RecorderWindow(QMainWindow):
             except subprocess.TimeoutExpired:
                 self.bag_process.kill()
             self.bag_process = None
-
-        # 3. Close all popup windows
-        for vw in self.video_widgets:
-            if vw.popup_window:
-                vw.popup_window.close()
         
-        # 4. Wait for all threads to finish
-        for th, _ in self.threads:
-            th.wait()
+        # 3. Wait for all threads to finish
+        for entry in self.threads:
+            entry['thread'].wait()
 
-        # 5. Final ROS cleanup
+        # 4. Final ROS cleanup
         if self.ros_node:
             self.ros_node.destroy_node()
             if rclpy.ok():

@@ -66,6 +66,6 @@ A script that uses OCR to compare the time burned into the video frames against 
 
 4.  **Verify Timestamps**:
     ```bash
-    python3 tests/check_timestamps.py test_data/YOUR_SESSION_FOLDER/extracted
+    python3 tests/check_timestamps.py -d test_data/YOUR_SESSION_FOLDER/extracted
     ```
     The script will output the average and maximum error between text-in-video and sidecar metadata.
