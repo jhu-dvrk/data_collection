@@ -4,4 +4,9 @@
     "insert",
     "retract"
   ]
+  ,
+  "tags": [
+    "dummy",
+    "test"
+  ]
 }
