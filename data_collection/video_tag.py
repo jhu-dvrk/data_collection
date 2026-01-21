@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Video Player with Frame-Accurate Seeking
+Video Annotator with Frame-Accurate Seeking
 Uses PyQt5 for UI and GStreamer for video playback
 """
 
@@ -8,28 +8,26 @@ import sys
 import os
 import argparse
 import json
+import signal
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QSlider, QLabel, 
-                             QFileDialog, QStyle, QListWidget, QListWidgetItem,
-                             QScrollArea, QSizePolicy, QComboBox)
+                             QFileDialog, QStyle, QScrollArea, QSizePolicy, 
+                             QComboBox, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPalette, QColor
 import gi
 gi.require_version('Gst', '1.0')
 gi.require_version('GstVideo', '1.0')
 from gi.repository import Gst, GstVideo, GLib
-import platform
-import re
 
 # Initialize GStreamer
 Gst.init(None)
 
 
 
-class VideoPlayer(QMainWindow):
+class VideoTag(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Video Player with Frame Seeking")
+        self.setWindowTitle("Video Tag with Frame Seeking")
         self.setGeometry(100, 100, 1400, 800)
         
         # GStreamer pipeline
@@ -47,7 +45,7 @@ class VideoPlayer(QMainWindow):
         self.tags = []  # Additional tags loaded from config
         self.frame_tags = {}  # Dictionary to track frame -> [tags] mapping
         self.video_path = None  # Track the current video path for saving
-        
+        self.unsaved_changes = False  # Track if there are unsaved changes        self.shortcut_map = {}  # Map for numeric shortcuts        
         # Setup UI
         self.init_ui()
         
@@ -202,76 +200,92 @@ class VideoPlayer(QMainWindow):
         """Populate the stages list with checkbox buttons and frame buttons"""
         # Clear existing widgets
         while self.stages_layout.count():
-            self.stages_layout.takeAt(0).widget().deleteLater()
+            item = self.stages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                # Recursively delete layout items if needed, though takeAt usually suffices for top level
+                # But here we added layouts directly using addLayout.
+                # When addLayout is used, the layout becomes a child.
+                # wait, addLayout puts the layout into the items list.
+                pass 
+                # PyQt handling of addLayout is tricky for deletion. 
+                # It's better if we wrapped each row in a QWidget, but current code uses addLayout directly.
+                # However, earlier code does:
+                # tag_layout = QHBoxLayout() ... self.stages_layout.addLayout(tag_layout)
+                # To clear a layout that has sub-layouts, one must delete the items.
+                
+        # Actually, standard way to clear layout with sub-layouts:
+        while self.stages_layout.count():
+            item = self.stages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                # If we added a layout directly, we need to delete its widgets
+                sublayout = item.layout()
+                while sublayout.count():
+                    subitem = sublayout.takeAt(0)
+                    if subitem.widget():
+                        subitem.widget().deleteLater()
+                sublayout.deleteLater()
+
         self.tag_buttons.clear()
+        self.shortcut_map = {}
+        shortcut_idx = 0
+        shortcuts = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
         
         # Create buttons for each stage/variant
         for stage in self.stages:
             for variant in ['start', 'end']:
                 tag_name = f"{stage} {variant}"
-                
-                # Create a horizontal layout for this tag
-                tag_layout = QHBoxLayout()
-                tag_layout.setContentsMargins(0, 0, 0, 0)
-                
-                # Create toggle button for the tag
-                tag_btn = QPushButton(tag_name)
-                tag_btn.setCheckable(True)
-                tag_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
-                tag_btn.clicked.connect(lambda checked, t=tag_name: self.toggle_tag(t))
-                tag_layout.addWidget(tag_btn)
-                
-                # Container for frame buttons
-                frames_widget = QWidget()
-                frames_layout = QHBoxLayout(frames_widget)
-                frames_layout.setContentsMargins(0, 0, 0, 0)
-                frames_layout.setSpacing(3)
-                
-                self.tag_buttons[tag_name] = {
-                    'checkbox': tag_btn,
-                    'frames': {},
-                    'frames_layout': frames_layout
-                }
-                
-                tag_layout.addWidget(frames_widget)
-                tag_layout.addStretch()
-                
-                # Add to main layout
-                self.stages_layout.addLayout(tag_layout)
+                shortcut = shortcuts[shortcut_idx] if shortcut_idx < len(shortcuts) else None
+                self.add_tag_row(tag_name, shortcut)
+                if shortcut:
+                    self.shortcut_map[shortcut] = tag_name
+                    shortcut_idx += 1
         
         # Create buttons for each direct tag (loaded as-is)
         for tag_name in self.tags:
-            # Create a horizontal layout for this tag
-            tag_layout = QHBoxLayout()
-            tag_layout.setContentsMargins(0, 0, 0, 0)
-            
-            # Create toggle button for the tag
-            tag_btn = QPushButton(tag_name)
-            tag_btn.setCheckable(True)
-            tag_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
-            tag_btn.clicked.connect(lambda checked, t=tag_name: self.toggle_tag(t))
-            tag_layout.addWidget(tag_btn)
-            
-            # Container for frame buttons
-            frames_widget = QWidget()
-            frames_layout = QHBoxLayout(frames_widget)
-            frames_layout.setContentsMargins(0, 0, 0, 0)
-            frames_layout.setSpacing(3)
-            
-            self.tag_buttons[tag_name] = {
-                'checkbox': tag_btn,
-                'frames': {},
-                'frames_layout': frames_layout
-            }
-            
-            tag_layout.addWidget(frames_widget)
-            tag_layout.addStretch()
-            
-            # Add to main layout
-            self.stages_layout.addLayout(tag_layout)
+            shortcut = shortcuts[shortcut_idx] if shortcut_idx < len(shortcuts) else None
+            self.add_tag_row(tag_name, shortcut)
+            if shortcut:
+                self.shortcut_map[shortcut] = tag_name
+                shortcut_idx += 1
         
         self.stages_layout.addStretch()
         self.update_stages_display()
+
+    def add_tag_row(self, tag_name, shortcut=None):
+        """Helper to create a single tag row UI"""
+        # Create a horizontal layout for this tag
+        tag_layout = QHBoxLayout()
+        tag_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Create toggle button for the tag
+        display_name = f"({shortcut}) {tag_name}" if shortcut is not None else tag_name
+        tag_btn = QPushButton(display_name)
+        tag_btn.setCheckable(True)
+        tag_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        tag_btn.clicked.connect(lambda checked, t=tag_name: self.toggle_tag(t))
+        tag_layout.addWidget(tag_btn)
+        
+        # Container for frame buttons
+        frames_widget = QWidget()
+        frames_layout = QHBoxLayout(frames_widget)
+        frames_layout.setContentsMargins(0, 0, 0, 0)
+        frames_layout.setSpacing(3)
+        
+        self.tag_buttons[tag_name] = {
+            'checkbox': tag_btn,
+            'frames': {},
+            'frames_layout': frames_layout
+        }
+        
+        tag_layout.addWidget(frames_widget)
+        tag_layout.addStretch()
+        
+        # Add to main layout
+        self.stages_layout.addLayout(tag_layout)
     
     def toggle_tag(self, tag_name):
         """Toggle a tag for the current frame"""
@@ -293,6 +307,7 @@ class VideoPlayer(QMainWindow):
                         del self.frame_tags[self.current_frame]
             
             # Update display (save happens only on explicit Save Tags button click)
+            self.unsaved_changes = True
             self.update_stages_display()
         
     def update_stages_display(self):
@@ -436,12 +451,6 @@ class VideoPlayer(QMainWindow):
             # Get the native window ID
             win_id = self.video_widget.winId()
             message.src.set_window_handle(win_id)
-        
-    def on_pad_added(self, element, pad, sink):
-        """Handle dynamic pad creation from decodebin"""
-        sink_pad = sink.get_static_pad("sink")
-        if not sink_pad.is_linked():
-            pad.link(sink_pad)
             
     def on_bus_message(self, bus, message):
         """Handle GStreamer bus messages"""
@@ -569,62 +578,82 @@ class VideoPlayer(QMainWindow):
         if state == Gst.State.PLAYING:
             self.timer.start()
             
+    def _execute_seek(self, seek_time):
+        """Execute seek operation and update UI"""
+        self.pipeline.seek(
+            1.0,
+            Gst.Format.TIME,
+            Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
+            Gst.SeekType.SET,
+            seek_time,
+            Gst.SeekType.NONE,
+            -1
+        )
+        
+        # Update UI immediately with target values while seek completes
+        pos_sec = seek_time / Gst.SECOND
+        self.timeline_label.setText(self.format_time(pos_sec))
+        
+        # Determine frame from seek time if we have FPS
+        if self.fps > 0:
+            self.current_frame = int(round((seek_time / Gst.SECOND) * self.fps))
+            
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setValue(self.current_frame)
+        self.frame_slider.blockSignals(False)
+        self.frame_label.setText(f"{self.current_frame} / {self.total_frames}")
+        
+        if self.duration > 0:
+            slider_pos = int((seek_time / self.duration) * 1000)
+            self.timeline_slider.blockSignals(True)
+            self.timeline_slider.setValue(slider_pos)
+            self.timeline_slider.blockSignals(False)
+            
+        # Schedule a delayed update after seek completes
+        QTimer.singleShot(100, self.update_position)
+
     def seek_to_position(self, position):
         """Seek to position based on timeline slider"""
         if not self.pipeline or self.duration <= 0:
             return
             
         seek_time = int((position / 1000.0) * self.duration)
-        self.pipeline.seek_simple(Gst.Format.TIME,
-                                 Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
-                                 seek_time)
-        # Update UI immediately with target values while seek completes
-        pos_sec = seek_time / Gst.SECOND
-        self.timeline_label.setText(self.format_time(pos_sec))
-        self.current_frame = int((seek_time / Gst.SECOND) * self.fps)
-        self.frame_slider.blockSignals(True)
-        self.frame_slider.setValue(self.current_frame)
-        self.frame_slider.blockSignals(False)
-        self.frame_label.setText(f"{self.current_frame} / {self.total_frames}")
-        # Schedule a delayed update after seek completes
-        QTimer.singleShot(50, self.update_position)
+        self._execute_seek(seek_time)
         
     def seek_to_frame(self, frame_num):
         """Seek to specific frame number"""
         if not self.pipeline or self.total_frames <= 0 or self.fps <= 0:
             return
         
-        # Calculate seek time from frame number
-        # frame_num = (time_in_seconds * fps)
-        # time_in_seconds = frame_num / fps
-        seek_time = int((frame_num / self.fps) * Gst.SECOND)
-        
-        self.pipeline.seek_simple(Gst.Format.TIME,
-                                 Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
-                                 seek_time)
-        
-        # Update UI immediately with target values while seek completes
-        pos_sec = seek_time / Gst.SECOND
-        self.timeline_label.setText(self.format_time(pos_sec))
-        self.current_frame = frame_num
-        self.frame_label.setText(f"{self.current_frame} / {self.total_frames}")
-        if self.duration > 0:
-            slider_pos = int((seek_time / self.duration) * 1000)
-            self.timeline_slider.blockSignals(True)
-            self.timeline_slider.setValue(slider_pos)
-            self.timeline_slider.blockSignals(False)
-        # Schedule a delayed update after seek completes
-        QTimer.singleShot(100, self.update_position)
+        # Calculate seek time from frame number with rounding for accuracy
+        seek_time = int(round((frame_num / self.fps) * Gst.SECOND))
+        self._execute_seek(seek_time)
         
     def prev_frame(self):
-        """Go to previous frame"""
+        """Go to previous frame and pause"""
+        if not self.pipeline:
+            return
+            
+        # Ensure playback is paused when stepping
+        self.pipeline.set_state(Gst.State.PAUSED)
+        self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.timer.stop()
+        
         if self.current_frame > 0:
             new_frame = self.current_frame - 1
             self.frame_stepping = True
             self.seek_to_frame(new_frame)
             
     def next_frame(self):
-        """Go to next frame"""
+        """Go to next frame and pause"""
+        if not self.pipeline:
+            return
+            
+        # Ensure playback is paused when stepping
+        self.pipeline.set_state(Gst.State.PAUSED)
+        self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.timer.stop()
+
         if self.current_frame < self.total_frames - 1:
             new_frame = self.current_frame + 1
             self.frame_stepping = True
@@ -745,28 +774,34 @@ class VideoPlayer(QMainWindow):
             end_tag = f"{stage} end"
             
             # Get frames where start and end tags appear
-            start_frames = [frame for frame in self.frame_tags if start_tag in self.frame_tags[frame]]
-            end_frames = [frame for frame in self.frame_tags if end_tag in self.frame_tags[frame]]
+            start_frames = sorted([frame for frame in self.frame_tags if start_tag in self.frame_tags[frame]])
+            end_frames = sorted([frame for frame in self.frame_tags if end_tag in self.frame_tags[frame]])
             
-            # Add entries for each matched pair
-            if start_frames and end_frames:
-                for start_frame in start_frames:
-                    for end_frame in end_frames:
-                        if start_frame <= end_frame:
-                            stages_data.append({
-                                "name": stage,
-                                "start": start_frame,
-                                "end": end_frame
-                            })
+            # Using the same logic as validation: pair the i-th start with the i-th end
+            # We assume validation has passed, so lengths are equal and end >= start
+            for start_frame, end_frame in zip(start_frames, end_frames):
+                stages_data.append({
+                    "name": stage,
+                    "start": start_frame,
+                    "end": end_frame
+                })
         
         # Build the tags data (for direct tags, not stage-based)
+        # Format: "tag_name": [frame1, frame2, ...]
         tags_data = {}
         for frame_num, tags in self.frame_tags.items():
             # Filter out stage-based tags
             direct_tags = [tag for tag in tags if tag not in [f"{s} start" for s in self.stages] 
                           and tag not in [f"{s} end" for s in self.stages]]
-            if direct_tags:
-                tags_data[str(frame_num)] = direct_tags
+            
+            for tag in direct_tags:
+                if tag not in tags_data:
+                    tags_data[tag] = []
+                tags_data[tag].append(frame_num)
+        
+        # Sort frame numbers for each tag
+        for tag in tags_data:
+            tags_data[tag].sort()
         
         try:
             output_data = {}
@@ -777,6 +812,7 @@ class VideoPlayer(QMainWindow):
                 
             with open(tags_file, 'w') as f:
                 json.dump(output_data, f, indent=2)
+            self.unsaved_changes = False
             self.info_label.setText(f"Tags saved to {os.path.basename(tags_file)}")
         except Exception as e:
             self.info_label.setText(f"Error saving tags: {e}")
@@ -789,13 +825,16 @@ class VideoPlayer(QMainWindow):
         base_path = os.path.splitext(self.video_path)[0]
         tags_file = f"{base_path}_tags.json"
         
+        # Reset current tags
+        self.frame_tags = {}
+        self.unsaved_changes = False
+        
         if os.path.exists(tags_file):
             try:
                 with open(tags_file, 'r') as f:
                     data = json.load(f)
                     
                     # Load stages in new format
-                    self.frame_tags = {}
                     for stage_entry in data.get("stages", []):
                         if isinstance(stage_entry, dict) and "name" in stage_entry:
                             stage_name = stage_entry["name"]
@@ -816,40 +855,82 @@ class VideoPlayer(QMainWindow):
                                 if end_tag not in self.frame_tags[end_frame]:
                                     self.frame_tags[end_frame].append(end_tag)
                     
-                    # Load direct tags
-                    for frame_str, tags in data.get("tags", {}).items():
-                        frame_num = int(frame_str)
-                        if frame_num not in self.frame_tags:
-                            self.frame_tags[frame_num] = []
-                        self.frame_tags[frame_num].extend(tags)
+                    # Load direct tags (format: tag_name -> [frame_indices])
+                    tags_section = data.get("tags", {})
+                    for tag_name, frames in tags_section.items():
+                        for frame_num in frames:
+                            if frame_num not in self.frame_tags:
+                                self.frame_tags[frame_num] = []
+                            if tag_name not in self.frame_tags[frame_num]:
+                                self.frame_tags[frame_num].append(tag_name)
                     
                     # Update display with loaded tags
                     self.update_stages_display()
             except Exception as e:
                 print(f"Error loading tags: {e}")
         
+        # Always update display to show current state (empty or loaded)
+        self.update_stages_display()
+        
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts"""
-        key = event.text().lower()
+        key_text = event.text().lower()
+        key_code = event.key()
+        modifiers = event.modifiers()
         
-        if key == 'a':
-            # Previous frame
-            self.prev_frame()
-        elif key == 's':
-            # Play/Pause
-            self.toggle_playback()
-        elif key == 'd':
-            # Next frame
-            self.next_frame()
-        elif key == 'q':
+        # Ctrl+C handler
+        if key_code == Qt.Key_C and modifiers & Qt.ControlModifier:
+            self.close()
+            return
+
+        if key_text == 'a':
             # Start from beginning
             self.stop()
+        elif key_text == 's':
+            # Previous frame
+            self.prev_frame()
+        elif key_text == 'd':
+            # Play/Pause
+            self.toggle_playback()
+        elif key_text == 'f':
+            # Next frame
+            self.next_frame()
+        elif key_text == 'q':
+            # Quit
+            self.close()
+        elif key_text in self.shortcut_map:
+            # Toggle tag via numeric shortcut
+            tag_name = self.shortcut_map[key_text]
+            if tag_name in self.tag_buttons:
+                # Toggle the button state (this will trigger toggle_tag via signal)
+                btn = self.tag_buttons[tag_name]['checkbox']
+                btn.setChecked(not btn.isChecked())
+                self.toggle_tag(tag_name)
         else:
             super().keyPressEvent(event)
     
     def closeEvent(self, event):
-        """Clean up on close"""
+        """Clean up on close with save prompt"""
+        if self.unsaved_changes:
+            reply = QMessageBox.question(self, 'Unsaved Changes',
+                                       "You have unsaved changes. Do you want to save them before quitting?",
+                                       QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
+
+            if reply == QMessageBox.Save:
+                # Validate and save
+                if self.validate_stage_pairs():
+                    self.write_tags_to_file()
+                    # After saving, we can close
+                else:
+                    # Validation failed, don't close, user needs to fix
+                    event.ignore()
+                    return
+            elif reply == QMessageBox.Cancel:
+                event.ignore()
+                return
+            # Discard case falls through to close
+            
         if self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
         event.accept()
@@ -859,14 +940,26 @@ def main():
     # Create QApplication FIRST before any QWidget instantiation
     app = QApplication(sys.argv)
     
+    # Handle Ctrl+C (SIGINT) from terminal gracefully
+    signal.signal(signal.SIGINT, lambda *args: QApplication.quit())
+    
+    # Use a timer to allow Python signal handler to run
+    timer = QTimer()
+    timer.start(500)
+    timer.timeout.connect(lambda: None) 
+    
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Video Player with Frame-Accurate Seeking')
+    parser = argparse.ArgumentParser(description='Video Tag with Frame-Accurate Seeking')
     parser.add_argument('-v', '--video', type=str, help='Path to video file to open on startup')
     parser.add_argument('-c', '--config', type=str, help='Path to JSON file with tags configuration')
     args = parser.parse_args()
     
     # Now create the player widget
-    player = VideoPlayer()
+    player = VideoTag()
+    
+    # Handle Ctrl+C (SIGINT) from terminal by closing the window
+    signal.signal(signal.SIGINT, lambda *args: player.close())
+    
     player.show()
     
     # Load stages if specified

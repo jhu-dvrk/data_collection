@@ -542,10 +542,10 @@ class VideoWidget(QOpenGLWidget):
             painter.drawImage(target, self.current_image)
         painter.end()
 
-class RecorderWindow(QMainWindow):
+class RecordWindow(QMainWindow):
     def __init__(self, config_files, joy_topic=None):
         super().__init__()
-        self.setWindowTitle("Video Recorder (OpenCV/GStreamer)")
+        self.setWindowTitle("Video Record (OpenCV/GStreamer)")
         self.config = self.load_configs(config_files)
         self.joy_topic = joy_topic
         self.threads = []
@@ -691,7 +691,7 @@ class RecorderWindow(QMainWindow):
         if not rclpy.ok():
             rclpy.init(args=sys.argv)
             
-        self.ros_node = rclpy.create_node('data_recorder')
+        self.ros_node = rclpy.create_node('record')
         
         # Subscriber "record" (Bool)
         self.sub_record = self.ros_node.create_subscription(
@@ -1347,7 +1347,7 @@ class RecorderWindow(QMainWindow):
         event.accept()
 
 def main():
-    parser = argparse.ArgumentParser(description="Video Recorder")
+    parser = argparse.ArgumentParser(description="Video Record")
     parser.add_argument("-c", "--config", help="Path to JSON configuration file", action="append", required=True)
     parser.add_argument("-p", "--joy-topic", help="ROS Joy topic for recording control (button 0)", default=None)
     args = parser.parse_args()
@@ -1371,7 +1371,7 @@ def main():
         
     signal.signal(signal.SIGINT, handle_sigint)
     
-    window = RecorderWindow(config_files, joy_topic=args.joy_topic)
+    window = RecordWindow(config_files, joy_topic=args.joy_topic)
     window.resize(800, 600)
     window.show()
     sys.exit(app.exec_())

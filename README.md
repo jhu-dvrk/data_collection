@@ -1,6 +1,6 @@
-# Video Data Recorder
+# Video Data Record
 
-A multi-stream video recorder application using Python, PyQt5, OpenCV, and GStreamer. It allows creating flexible video streams via JSON configuration, provides live previews, and supports synchronized recording with timestamps.  ROS topics can also be recorded along the videos.  Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
+A multi-stream video record application using Python, PyQt5, OpenCV, and GStreamer. It allows creating flexible video streams via JSON configuration, provides live previews, and supports synchronized recording with timestamps.  ROS topics can also be recorded along the videos.  Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
 
 The application also integrates with ROS2 for remote control and status monitoring.
 
@@ -11,6 +11,11 @@ The application also integrates with ROS2 for remote control and status monitori
     ```bash
     sudo apt install libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-plugins-base-apps python3-opencv python3-numpy python3-pyqt5 python3-pyqt5.qtmultimedia libqt5multimedia5-plugins qmlglsink
     ```
+*   **Python Dependencies**:
+    - `PyQt5`: GUI framework for the record and video_tag.
+    - `GStreamer (gi)`: Core pipeline handling for recording and playback.
+    - `argparse`, `json`, `signal`: Standard libraries for configuration and signal handling.
+    - `opencv-python`: Used by the extract for image processing.
 
 ## NVIDIA Hardware Acceleration
 
@@ -48,7 +53,7 @@ source install/setup.bash
 
 ### 1. Configuration
 
-Define your video sources in a JSON file. The configuration format is defined in the [JSON schema](share/data_recorder.schema.json).
+Define your video sources in a JSON file. The configuration format is defined in the [JSON schema](share/record.schema.json).
 
 **Example `config.json`:**
 ```json
@@ -113,18 +118,18 @@ Configuration files can reference other configuration files using the `configura
 
 This approach enables modular configurations where you can maintain separate files for each device or component and combine them as needed for different experimental setups.
 
-### 2. Running the Recorder
+### 2. Running the Record
 
-After building your workspace, run the recorder using `ros2 run`:
+After building your workspace, run the record using `ros2 run`:
 
 ```bash
-ros2 run data_collection data_recorder -c config.json
+ros2 run data_collection record -c config.json
 ```
 
 Multiple configuration files can be loaded and merged. You can collect multiple video streams and multiple ROS topics defined in existing files (e.g. `PSM1.json`). This allows users to re-use configuration files for each component used for a given experimental setup.
 
 ```bash
-ros2 run data_collection data_recorder -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
+ros2 run data_collection record -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
 ```
 
 **Note**: Configuration file paths can be relative to your current working directory or absolute paths.
@@ -143,20 +148,20 @@ If the `stages` field is provided in the configuration, a "Stages" list will app
 
 ### 4. Data Post-processing
 
-The `extract_frames.py` script identifies all data in a session directory and:
+The `extract.py` script identifies all data in a session directory and:
 1.  Extracts individual frames from all recorded `.mp4` files using sidecar `.json` nanosecond timestamps.
 2.  Converts all recorded ROS bag topics into individual `.csv` files.
 
 To process a recorded session directory:
 
 ```bash
-ros2 run data_collection extract_frames -d 20260117_153206
+ros2 run data_collection extract -d 20260117_153206
 ```
 
 To list the videos in a session without processing:
 
 ```bash
-ros2 run data_collection extract_frames -d 20260117_153206 -l
+ros2 run data_collection extract -d 20260117_153206 -l
 ```
 
 ### 5. Synchronization Verification
@@ -167,7 +172,26 @@ The `check_timestamps.py` script verifies the synchronization between the record
 ros2 run data_collection check_timestamps -d 20260117_153206/extracted
 ```
 
+### 6. Video Tag Tool
+
+The `video_tag` tool is a PyQt5-based GUI application designed for post-recording data curation. It allows users to review recorded videos with frame-accurate precision and assign temporal labels (stages) or discrete frame tags.
+
+```bash
+# Run via ROS2
+ros2 run data_collection video_tag -v video.mp4 -c config.json
+
+# Run directly
+python3 -m data_collection.video_tag -v video.mp4 -c config.json
+```
+
 **Key Features**:
+- **Frame-Accurate Seeking**: Navigate to exact frame indices using a slider or A/D keys.
+- **Tag Management**: Toggle stages (start/end pairs) or single-frame tags.
+- **Shortcuts**: Numeric keys (1-0) for the first 10 tags, space/S for play/pause.
+- **Persistence**: Saves annotations to a `_tags.json` file in a structured format.
+- **Graceful Exit**: Support for `Ctrl+C` and "Q" key with prompts to save unsaved changes.
+
+**Key Features (check_timestamps)**:
 - **Automatic ROI**: Specifically targets the bottom 30px black watermark strip for speed and accuracy.
 - **Latency Analysis**: Calculates the average difference between system capture time and the video's internal clock.
 - **Jitter Measurement**: Calculates the standard deviation of latency across all frames.
@@ -176,14 +200,14 @@ ros2 run data_collection check_timestamps -d 20260117_153206/extracted
 
 ## ROS2 Integration
 
-The recorder functions as a ROS2 node named `data_recorder`.
+The record functions as a ROS2 node named `record`.
 
 ### Topics
 
 | Topic | Type | Direction | Description |
 |-------|------|-----------|-------------|
-| `/data_recorder/record` | `std_msgs/msg/Bool` | Subscriber | Send `true` to start recording, `false` to stop. |
-| `/data_recorder/recording` | `std_msgs/msg/Bool` | Publisher | Publishes actual recording state (`true` if recording). |
+| `/record/record` | `std_msgs/msg/Bool` | Subscriber | Send `true` to start recording, `false` to stop. |
+| `/record/recording` | `std_msgs/msg/Bool` | Publisher | Publishes actual recording state (`true` if recording). |
 
 ### Command Line Examples
 
@@ -191,15 +215,15 @@ Ensure you have sourced your ROS2 environment (e.g., `source /opt/ros/humble/set
 
 **Start Recording:**
 ```bash
-ros2 topic pub /data_recorder/record std_msgs/msg/Bool "{data: true}" --once
+ros2 topic pub /record/record std_msgs/msg/Bool "{data: true}" --once
 ```
 
 **Stop Recording:**
 ```bash
-ros2 topic pub /data_recorder/record std_msgs/msg/Bool "{data: false}" --once
+ros2 topic pub /record/record std_msgs/msg/Bool "{data: false}" --once
 ```
 
 **Monitor Status:**
 ```bash
-ros2 topic echo /data_recorder/recording
+ros2 topic echo /record/recording
 ```

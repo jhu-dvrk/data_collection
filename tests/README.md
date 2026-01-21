@@ -1,6 +1,6 @@
-# Test Suite for Video Data Recorder
+# Test Suite for Video Data Record
 
-This directory contains test configurations, scripts, and verification tools to ensure the data recorder is functioning correctly.
+This directory contains test configurations, scripts, and verification tools to ensure the data record is functioning correctly.
 
 ## Prerequisites
 
@@ -50,9 +50,9 @@ A script that uses OCR to compare the time burned into the video frames against 
     python3 tests/ros_publisher.py
     ```
 
-2.  **Run the Recorder**:
+2.  **Run the Record**:
     ```bash
-    ./data_recorder.py -c tests/capture_config.json
+    ros2 run data_collection record -c tests/capture_config.json
     ```
     *   Click **Start Recording**.
     *   Wait for a few seconds.
@@ -61,7 +61,7 @@ A script that uses OCR to compare the time burned into the video frames against 
 3.  **Extract Data**:
     Identify the session directory (e.g., `test_data/20260118_120000_test_run`) and run:
     ```bash
-    python3 data_collection/extract_frames.py -d test_data/YOUR_SESSION_FOLDER
+    ros2 run data_collection extract -d test_data/YOUR_SESSION_FOLDER
     ```
 
 4.  **Verify Timestamps**:

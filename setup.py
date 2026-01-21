@@ -24,8 +24,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'data_recorder = data_collection.data_recorder:main',
-            'extract_frames = data_collection.extract_frames:main',
+            'record = data_collection.record:main',
+            'extract = data_collection.extract:main',
+            'video_tag = data_collection.video_tag:main',
         ],
     },
 )
