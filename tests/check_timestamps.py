@@ -23,46 +23,44 @@ def parse_gst_time(time_str):
         time_str = time_str.strip()
         
         # Aggressively strip quotes from start/end or inside
-        # Tesseract might read '10:00:00' as '10:00:00 (missing one quote) or 10:00:00'
-        # or even put spaces like ' 10:00:00 '
         clean_str = time_str.replace("'", "").replace('"', "").strip()
         
-        # Check if it is a 9-digit nanosecond string (%N)
-        if len(clean_str) == 9 and clean_str.isdigit():
-            return int(clean_str) / 1e9
-
-        # Try parsing as Date Time (new clockoverlay format: YYYY-MM-DD HH:MM:SS)
+        # Try parsing as Date Time (new format: YYYY-MM-DD HH:MM:SS.ffffff)
         try:
-             dt = datetime.datetime.strptime(clean_str, "%Y-%m-%d %H:%M:%S")
-             return dt.timestamp()
-        except ValueError:
+             # Handle potential OCR errors like double colons or spaces instead of colons
+             # Regex to find: YYYY-MM-DD HH:MM:SS.ffffff
+             # Matches: 2024-01-22 18:30:45.123 or 2024-01-22 18:30:45
+             match = re.search(r'(\d{4}[-.\s]\d{2}[-.\s]\d{2})\s+(\d{2}[:\s]+\d{2}[:\s]+\d{2})(?:\.(\d+))?', clean_str)
+             if match:
+                 date_part = match.group(1).replace(" ", "-").replace(".", "-")
+                 # Normalize time part (replace double colons or spaces with single colon)
+                 time_part = re.sub(r'[:\s]+', ':', match.group(2))
+                 frac_part = match.group(3) or "0"
+                 # strptime %f expects exactly 6 digits. Pad or truncate.
+                 frac_part = (frac_part + "000000")[:6]
+                 
+                 try:
+                     dt_str = f"{date_part} {time_part}.{frac_part}"
+                     dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S.%f")
+                     return dt.timestamp()
+                 except ValueError:
+                     pass
+                     
+             # Fallback to pure time format if date is missing (legacy)
+             match_time = re.search(r'(\d{2}[:\s]+\d{2}[:\s]+\d{2})(?:\.(\d+))?', clean_str)
+             if match_time:
+                 time_part = re.sub(r'[:\s]+', ':', match_time.group(1))
+                 frac_part = match_time.group(2) or "0"
+                 frac_part = (frac_part + "000000")[:6]
+                 try:
+                     dt = datetime.datetime.strptime(f"{time_part}.{frac_part}", "%H:%M:%S.%f")
+                     # This returns seconds from midnight if we don't care about date
+                     return dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond / 1e6
+                 except ValueError:
+                     pass
+        except Exception:
              pass
-
-        parts = clean_str.split(':')
-        if len(parts) == 3:
-            hours = int(parts[0])
-            minutes = int(parts[1])
-            if minutes >= 60:
-                return None
-            
-            # Handle seconds
-            if '.' in parts[2]:
-                sec_parts = parts[2].split('.')
-                seconds = int(sec_parts[0])
-                if seconds >= 60:
-                    return None
-                ns_str = sec_parts[1]
-                # Keep digits only for fraction
-                ns_str = ''.join(filter(str.isdigit, ns_str))
-                ns = float("0." + ns_str) if ns_str else 0.0
-                return hours * 3600 + minutes * 60 + seconds + ns
-            else:
-                seconds = float(parts[2])
-                if seconds >= 60:
-                    return None
-                return hours * 3600 + minutes * 60 + seconds
     except Exception:
-        # print(f"Debug: Failed to parse '{time_str}'")
         pass
     return None
 
@@ -95,23 +93,22 @@ def get_text_bbox(img_bgr):
 def process_single_frame(args):
     """
     Worker function to process a single frame.
-    args: (idx, frame_path, file_ts, top_bbox, bottom_bbox)
-    Returns: (idx, rel_text, rel_ts, abs_text, abs_ts, file_ts)
+    args: (idx, frame_path, file_ts, top_bbox)
+    Returns: (idx, ocr_text, ocr_ts, file_ts)
     """
-    idx, frame_path, file_ts, top_bbox, bottom_bbox = args
+    idx, frame_path, file_ts, top_bbox = args
     
     # Read Image
     img = cv2.imread(frame_path)
     if img is None:
-        return idx, None, None, None, None, file_ts
+        return idx, None, None, file_ts
     
     h, w = img.shape[:2]
     strip_height = 30
     strip_start_y = h - strip_height
-    mid_x = w // 2
     
-    # --- Bottom-Left: Relative Time (Running Time) ---
-    # top_bbox is relative to the left half of the bottom strip
+    # --- Bottom: Absolute Time (Clock Time) ---
+    # top_bbox is relative to the bottom strip (left side)
     if top_bbox:
         tx1, ty1, tx2, ty2 = top_bbox
         roi_top = img[strip_start_y + ty1 : strip_start_y + ty2, tx1 : tx2]
@@ -124,48 +121,25 @@ def process_single_frame(args):
     if roi_top is not None and roi_top.size > 0:
         roi_top = cv2.resize(roi_top, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
         gray_top = cv2.cvtColor(roi_top, cv2.COLOR_BGR2GRAY)
-        gray_top = cv2.bitwise_not(gray_top)
+        
+        # Tesseract prefers black text on white background.
+        # If the image is mostly dark, we invert it.
+        if np.mean(gray_top) < 127:
+            gray_top = cv2.bitwise_not(gray_top)
+            
         _, thresh_top = cv2.threshold(gray_top, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
         if pytesseract:
             try:
-                # Expect digits, colons, dots. No quotes.
-                config = '--psm 6 -c tessedit_char_whitelist=0123456789:.' 
+                # Expect YYYY-MM-DD HH:MM:SS.ffffff
+                # Allow spaces and colons clearly in whitelist
+                config = '--psm 7 -c tessedit_char_whitelist=0123456789:.- ' 
                 rel_text = pytesseract.image_to_string(thresh_top, config=config).strip()
                 rel_ts = parse_gst_time(rel_text)
             except Exception:
                 pass
 
-    # --- Bottom-Right: Absolute Time (Clock Time) ---
-    # bottom_bbox is relative to the right half of the bottom strip
-    if bottom_bbox:
-        bx1, by1, bx2, by2 = bottom_bbox
-        roi_bottom = img[strip_start_y + by1 : strip_start_y + by2, mid_x + bx1 : mid_x + bx2]
-    else:
-        roi_bottom = None
-    
-    abs_text = ""
-    abs_ts = None
-    
-    if roi_bottom is not None and roi_bottom.size > 0:
-        roi_bottom = cv2.resize(roi_bottom, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        gray_bottom = cv2.cvtColor(roi_bottom, cv2.COLOR_BGR2GRAY)
-        gray_bottom = cv2.bitwise_not(gray_bottom)
-        _, thresh_bottom = cv2.threshold(gray_bottom, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        if pytesseract:
-            try:
-                # Use PSM 7 (Single Line) given we have a tight crop.
-                # Remove whitelist to see raw output (debug mode)
-                config = '--psm 7' 
-                abs_text = pytesseract.image_to_string(thresh_bottom, config=config).strip()
-                abs_ts = parse_gst_time(abs_text)
-            except Exception as e:
-                # Print output to debug why OCR is failing (e.g. TesseractNotFoundError)
-                print(f"Frame {idx}: OCR Error: {e}")
-                pass
-
-    return idx, rel_text, rel_ts, abs_text, abs_ts, file_ts
+    return idx, rel_text, rel_ts, file_ts
 
 def verify_frames(frames_dir, num_jobs=None):
     if pytesseract is None:
@@ -216,7 +190,6 @@ def verify_frames(frames_dir, num_jobs=None):
         first_frame_path = os.path.join(frames_dir, frames[0]['file'])
         img_0 = cv2.imread(first_frame_path)
         top_bbox = None
-        bottom_bbox = None
         
         if img_0 is not None:
             h, w = img_0.shape[:2]
@@ -224,36 +197,36 @@ def verify_frames(frames_dir, num_jobs=None):
             strip_height = 30
             strip_start_y = h - strip_height
             
-            # Divide strip into left (relative time) and right (clock time)
+            # The absolute timestamp is on the left side
             mid_x = w // 2
             
             # Left side of strip
             img_strip_left = img_0[strip_start_y:, 0:mid_x]
             top_bbox = get_text_bbox(img_strip_left)
             
-            # Right side of strip
-            img_strip_right = img_0[strip_start_y:, mid_x:]
-            bottom_bbox = get_text_bbox(img_strip_right)
-            
             if top_bbox:
-                print(f"  Detected Relative Time BBox (bottom-left): {top_bbox}")
+                print(f"  Detected Absolute Time BBox (bottom-left): {top_bbox}")
+                # Save ROI for debugging
+                tx1, ty1, tx2, ty2 = top_bbox
+                debug_roi = img_strip_left[ty1:ty2, tx1:tx2]
+                debug_path = "debug_roi.png"
+                cv2.imwrite(debug_path, debug_roi)
+                print(f"  Saved debug ROI to {os.path.abspath(debug_path)}")
             else:
-                print("  Warning: Could not detect relative time in bottom-left strip.")
-
-            if bottom_bbox:
-                print(f"  Detected Absolute Time BBox (bottom-right): {bottom_bbox}")
-            else:
-                print("  Warning: Could not detect absolute time in bottom-right strip.")
+                print("  Warning: Could not detect absolute time in bottom-left strip.")
+                # Save the whole strip if detection fails
+                cv2.imwrite("debug_strip.png", img_strip_left)
+                print(f"  Saved failed strip to {os.path.abspath('debug_strip.png')}")
 
         # Prepare arguments for parallel processing
         tasks = []
         for idx, frame_ctx in enumerate(frames):
             frame_path = os.path.join(frames_dir, frame_ctx['file'])
             file_ts = frame_ctx['ts']
-            tasks.append((idx, frame_path, file_ts, top_bbox, bottom_bbox))
+            tasks.append((idx, frame_path, file_ts, top_bbox))
 
         # Process frames in parallel
-        # Results will be a list of (idx, rel_text, rel_ts, abs_text, abs_ts, file_ts)
+        # Results will be a list of (idx, ocr_text, ocr_ts, file_ts)
         results = []
         with multiprocessing.Pool(processes=num_processes) as pool:
             # chunksize can help performance for many small tasks
@@ -267,35 +240,26 @@ def verify_frames(frames_dir, num_jobs=None):
         # Sort results by index to ensure correct order
         results.sort(key=lambda x: x[0])
 
-        # Analyze transitions sequentially
+        # Analyze differences sequentially
         diffs = []
-        transitions = []
-        prev_abs_time = None
-        prev_result = None
-
+        counts = {'total': len(results), 'failed': 0, 'outlier': 0, 'valid': 0}
+        
         for result in results:
-            idx, rel_text, rel_ts, abs_text, abs_ts, file_ts = result
-            
-            # Using Absolute Time (Bottom Overlay) for Wall Clock verification
-            ocr_ts = abs_ts
-            text = abs_text
+            idx, text, ocr_ts, file_ts = result
             
             if ocr_ts is None:
-                # Print failure for every frame to debug
-                print(f"Frame {idx}: Failed to parse AbsTimestamp. raw_ocr_output='{text}'") 
+                counts['failed'] += 1
                 continue
             
             # Reconstruction of full timestamp
             # If ocr_ts is small (seconds from midnight), reconstruct using file date.
-            # If ocr_ts is large (full timestamp), use directly.
-            
             if ocr_ts < 200000: # Arbitrary cutoff, 86400 is max seconds in day
                 dt_file = datetime.datetime.fromtimestamp(file_ts)
                 day_start = dt_file.replace(hour=0, minute=0, second=0, microsecond=0)
                 ocr_dt = day_start + datetime.timedelta(seconds=ocr_ts)
                 full_ocr_ts = ocr_dt.timestamp()
 
-                # Handle day wrapping (e.g. file_ts is 00:00:01, ocr reads 23:59:59 from previous day)
+                # Handle day wrapping
                 diff_check = full_ocr_ts - file_ts
                 if diff_check > 12 * 3600:
                     full_ocr_ts -= 24 * 3600
@@ -309,60 +273,32 @@ def verify_frames(frames_dir, num_jobs=None):
             
             # Sanity check: If OCR is more than 10s away from file TS, it's likely a misread digit
             if abs(diff) > 10.0:
-                 # Only print if it's not a common day-wrap or similar
-                 # print(f"Frame {idx}: Skipping outlier OCR result (Diff: {diff:.3f}s, OCR: {text})")
+                 counts['outlier'] += 1
                  continue
 
-            # Detect Transition: When OCR integer second changes.
-            if prev_abs_time is not None:
-                if ocr_ts != prev_abs_time:
-                    # Time changed!
-                    if ocr_ts == prev_abs_time + 1.0:
-                        # Smooth 1 second increment
-                        prev_idx, _, _, _, _, prev_file_ts = prev_result
-                        
-                        transition_entry = {
-                            'frame': idx,
-                            'prev_file_ts': prev_file_ts,
-                            'curr_file_ts': file_ts,
-                            'ocr_ts': ocr_ts,
-                            'delta': file_ts - ocr_ts 
-                        }
-                        transitions.append(transition_entry)
-
             diffs.append(diff)
-            prev_abs_time = ocr_ts
-            prev_result = result
+            counts['valid'] += 1
             
             # Just print a few samples to show it worked
             if idx % 20 == 0:
-                 print(f"Frame {idx}: Abs={text} ({ocr_ts:.3f}), Rel={rel_text} ({rel_ts if rel_ts else 'None'}), FileTS={file_ts:.3f}, Diff={diff:.3f}")
+                 print(f"Frame {idx}: OCR={text} ({ocr_ts:.3f}), FileTS={file_ts:.3f}, Latency={diff*1000:.1f}ms")
 
         # Summary
-        if transitions:
-            print(f"\n--- Transition Analysis (Sub-second Estimation) ---")
-            deltas = [t['delta'] for t in transitions]
-            avg_delta = np.mean(deltas)
-            std_delta = np.std(deltas)
-            min_delta = np.min(deltas)
-            max_delta = np.max(deltas)
-            
-            print(f"Detected {len(transitions)} second-boundaries.")
-            print(f"Average Latency (FileCaptureTime - OCR_Second): {avg_delta*1000:.2f} ms")
-            print(f"Jitter (StdDev): {std_delta*1000:.2f} ms")
-            print(f"Min Latency: {min_delta*1000:.2f} ms")
-            print(f"Max Latency: {max_delta*1000:.2f} ms")
-            
-            print("\nDetailed Transitions:")
-            for t in transitions[:5]: # Show first 5
-                 print(f"  Frame {t['frame']}: Changed to {t['ocr_ts']}s. Capture Time: {t['curr_file_ts']:.3f}. Latency: {t['delta']*1000:.1f}ms")
-            if len(transitions) > 5:
-                print(f"  ... and {len(transitions)-5} more.")
+        print(f"\nAnalysis Summary for {stream_name}:")
+        print(f"  Frames Processed: {counts['total']}")
+        print(f"  Valid Timestamps: {counts['valid']} ({(counts['valid']/counts['total'])*100.0:.1f}%)")
+        print(f"  Failed OCR:       {counts['failed']}")
+        print(f"  Outliers:         {counts['outlier']}")
 
-        elif diffs:
-             print("\nNo second-boundaries detected (maybe short video?).")
+        if diffs:
              avg_diff = np.mean(diffs)
-             print(f"Average Diff (FileTS - OCR): {avg_diff:.3f} s")
+             std_diff = np.std(diffs)
+             print(f"  Average Latency:  {avg_diff*1000:.2f} ms")
+             print(f"  Jitter (StdDev):  {std_diff*1000:.2f} ms")
+             print(f"  Min Latency:      {np.min(diffs)*1000:.2f} ms")
+             print(f"  Max Latency:      {np.max(diffs)*1000:.2f} ms")
+        else:
+             print("  Warning: No valid timestamps found for latency analysis.")
 
 def main():
     parser = argparse.ArgumentParser(description="Check synchronization of extracted frames using OCR")

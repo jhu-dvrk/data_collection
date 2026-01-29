@@ -1,8 +1,5 @@
 {
   "data_directory": "test_data",
-  "ros_topics": [
-    "/test_topic"
-  ],
   "videos": [
     {
       "name": "test_stream",

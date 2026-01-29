@@ -134,19 +134,19 @@ class VideoThread(QThread):
         # videobox: adds 30px height to bottom (negative value adds border)
         overlay_str = ""
         if self.time_watermark:
+            # Set datetime-epoch based on current local time with timezone info
+            now = datetime.datetime.now().astimezone()
+            now_iso = now.isoformat(timespec='milliseconds')
+            # Format timezone for GStreamer (needs to be escaped or quoted usually, but ISO 8601 is generally okay)
             overlay_str = (
                 " ! videobox bottom=-30 "
-                " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" ypad=6 "
-                " ! clockoverlay time-format=\"%Y-%m-%d %H:%M:%S\" valignment=bottom halignment=right font-desc=\"Sans, 10\" ypad=6 "
+                f" ! timeoverlay time-mode=buffer-time show-times-as-dates=true datetime-epoch={now_iso} datetime-format=\"%Y-%m-%d %H:%M:%S.%f\" valignment=bottom halignment=left font-desc=\"Sans, 10\" ypad=6 "
             )
-
+    
         # Construct GStreamer video pipeline for OpenCV capture
         # We need BGR frames for OpenCV
-        if "appsink" not in source_str:
-            read_video_pipeline = f"{source_str} {tee_str} {overlay_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
-        else:
-            read_video_pipeline = source_str
-
+        read_video_pipeline = f"{source_str} {tee_str} {overlay_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
+        
         # Note: We must specify cv2.CAP_GSTREAMER to force GStreamer backend
         cap = cv2.VideoCapture(read_video_pipeline, cv2.CAP_GSTREAMER)
 
@@ -324,7 +324,7 @@ class VideoThread(QThread):
         bitrate_bits = bitrate_kb * 1000
         
         encoder_str = encoder_template.format(
-            bitrate=bitrate_bits,
+            bitrate_bits=bitrate_bits,
             bitrate_kb=bitrate_kb,
             speed_preset=int(speed_preset),
             key_int_max=int(key_int_max)
@@ -546,6 +546,10 @@ class RecordWindow(QMainWindow):
     def __init__(self, config_files, joy_topic=None):
         super().__init__()
         self.setWindowTitle("Video Record (OpenCV/GStreamer)")
+        
+        # Pre-detect best encoder to avoid delay on first record
+        VideoThread.get_best_encoder()
+
         self.config = self.load_configs(config_files)
         self.joy_topic = joy_topic
         self.threads = []
@@ -987,14 +991,12 @@ class RecordWindow(QMainWindow):
             
             chk_preview = QCheckBox("Preview")
             chk_preview.setChecked(True)
-            chk_watermark = QCheckBox("Time watermark")
             chk_record = QCheckBox("Record")
 
             # Header layout
             header_layout = QHBoxLayout()
             header_layout.addWidget(lbl)
             header_layout.addWidget(chk_record)
-            header_layout.addWidget(chk_watermark)
             header_layout.addWidget(chk_preview)
             header_layout.addStretch()
 
@@ -1016,7 +1018,6 @@ class RecordWindow(QMainWindow):
             self.threads.append({
                 'thread': th,
                 'chk_record': chk_record,
-                'chk_watermark': chk_watermark,
                 'lbl_stats': lbl_stats
             })
 
@@ -1024,14 +1025,8 @@ class RecordWindow(QMainWindow):
             chk_preview.toggled.connect(vw.set_preview_enabled)
             chk_preview.toggled.connect(lambda checked, t=th: setattr(t, 'preview_enabled', checked))
             
-            def toggle_watermark(checked, t=th):
-                t.time_watermark = checked
-                t._restart_cap = True
-            chk_watermark.toggled.connect(toggle_watermark)
-
             # Set initial state from config
             chk_record.setChecked(p_config.get('record', True))
-            chk_watermark.setChecked(p_config.get('time_watermark', False))
             
             # Container
             v_layout = QVBoxLayout()
@@ -1249,11 +1244,9 @@ class RecordWindow(QMainWindow):
             for entry in self.threads:
                 th = entry['thread']
                 chk_rec = entry['chk_record']
-                chk_wm = entry['chk_watermark']
                 
                 # Disable checkboxes
                 chk_rec.setEnabled(False)
-                chk_wm.setEnabled(False)
                 
                 # Update record config based on checkbox
                 th.video_config['record'] = chk_rec.isChecked()
@@ -1270,11 +1263,9 @@ class RecordWindow(QMainWindow):
             for entry in self.threads:
                 th = entry['thread']
                 chk_rec = entry['chk_record']
-                chk_wm = entry['chk_watermark']
                 
                 th.set_recording(False, self.base_dir)
                 chk_rec.setEnabled(True)
-                chk_wm.setEnabled(True)
             
             # Stop ROS Bag
             if self.bag_process:
@@ -1321,11 +1312,16 @@ class RecordWindow(QMainWindow):
             self.pub_recording.publish(msg)
 
     def closeEvent(self, event):
+        # Stop recording gracefully if it's currently active
+        if self.is_recording:
+            print("Stopping recording before exit...")
+            self.toggle_recording()
+
         # 1. Signal all threads to stop (without waiting yet)
         for entry in self.threads:
             entry['thread']._run_flag = False
             
-        # 2. Stop ROS Bag immediately if recording
+        # 2. Stop ROS Bag if it's still running for some reason
         if self.bag_process:
             print("Stopping rosbag during exit...")
             self.bag_process.send_signal(signal.SIGINT)
