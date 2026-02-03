@@ -3,13 +3,18 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include <mutex>
+#include <memory>
 #include <gtk/gtk.h>
 #include <gst/gst.h>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 
 extern int app_max_threads;
+
+// Forward declarations to reduce compilation time
+namespace rosbag2_cpp { class Writer; }
 
 struct VideoStage {
     std::string stage;
@@ -67,17 +72,27 @@ struct AppData {
 
     // ROS 2 members
     std::string trigger_topic;
-    rclcpp::Node::SharedPtr node;
-    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_record;
+    std::shared_ptr<rclcpp::Node> node;
+    std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Bool>> sub_record;
+    
+    // ROS Bag members
+    std::vector<std::string> ros_topics;
+    std::unique_ptr<rosbag2_cpp::Writer> bag_writer;
+    std::vector<std::shared_ptr<rclcpp::GenericSubscription>> bag_subs;
+    std::set<std::string> subscribed_topics; // Track existing subscriptions
+    std::vector<std::shared_ptr<rclcpp::TimerBase>> timers;
+
+    // Bag Stats
+    long long bag_messages_recorded;
+    int bag_topics_found;
+    GtkWidget *bag_stats_label;
+
+    bool explicit_stages;
+
     std::mutex data_mutex;
     
-    AppData() : audio_pipeline(NULL), audio_sink(NULL), audio_valve(NULL), audio_src(NULL),
-                window(NULL), record_button(NULL), data_dir_entry(NULL), 
-                audio_level_bar(NULL), audio_enable_checkbox(NULL),
-                audio_src_combo(NULL), stages_combo(NULL), session_entry(NULL), grid(NULL),
-                data_directory("."), session_stage_cycle_count(1), current_stage_idx(0), global_recording(false), 
-                blink_state(false), session_initialized(false), audio_is_recording(false), 
-                is_quitting(false), enable_audio(false), eos_received_count(0) {}
+    AppData(); // Defined in cpp
+    ~AppData(); // Defined in cpp
 };
 
 #endif // CONTEXT_HPP

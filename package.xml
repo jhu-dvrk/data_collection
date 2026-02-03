@@ -11,6 +11,7 @@
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>rosbag2_cpp</depend>
   <build_depend>ament_cmake</build_depend>
   <build_depend>ament_cmake_python</build_depend>
   <build_depend>pkg-config</build_depend>

@@ -16,6 +16,7 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-video-1.0 gstreamer-app-1.0)
@@ -34,6 +35,7 @@ ament_target_dependencies(record_c
   rclcpp
   std_msgs
   sensor_msgs
+  rosbag2_cpp
 )
 target_include_directories(record_c PRIVATE
   ${GST_INCLUDE_DIRS}

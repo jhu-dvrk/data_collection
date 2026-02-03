@@ -1,10 +1,15 @@
 #include "ui.hpp"
 #include "pipeline.hpp"
+#include "ros_node.hpp"
 
 #include <iostream>
 #include <fstream>
 #include <memory>
+#include <sstream>
+#include <gtk/gtk.h>
+#include <gst/gst.h>
 #include <json/json.h>
+#include <rclcpp/rclcpp.hpp>
 
 void update_stage_highlighting(AppData *data) {
     for (size_t i = 0; i < data->stage_labels.size(); ++i) {
@@ -37,6 +42,13 @@ void toggle_recording(AppData *data) {
             g_object_set(data->audio_valve, "drop", !audio_rec, NULL);
             if (audio_rec) data->audio_stages.push_back({final_stage_name, {}});
         }
+        
+        // Start ROS Bag
+        if (!data->ros_topics.empty()) {
+             std::string bag_path = data->session_dir + "/rosbag_" + final_stage_name;
+             open_bag_writer(data, bag_path);
+        }
+
         for (auto s : data->streams) {
             bool stream_rec = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s->record_checkbox));
             s->is_recording = stream_rec;
@@ -48,6 +60,10 @@ void toggle_recording(AppData *data) {
             data->audio_is_recording = false;
             g_object_set(data->audio_valve, "drop", TRUE, NULL);
         }
+        
+        // Stop ROS Bag
+        close_bag_writer(data);
+        
         for (auto s : data->streams) {
             if (!s->stages.empty()) {
                 s->last_run_stage_name = s->stages.back().stage;
@@ -174,7 +190,7 @@ void on_window_destroy_cb(GtkWidget *w, gpointer d) {
     if (ad->streams.empty() && !ad->audio_pipeline) gtk_main_quit();
     
     // Shutdown ROS 2
-    rclcpp::shutdown();
+    if (rclcpp::ok()) rclcpp::shutdown();
 }
 
 void create_main_window(AppData* data) {
@@ -200,37 +216,39 @@ void create_main_window(AppData* data) {
     gtk_box_pack_start(GTK_BOX(f1_hbox), f1b_vbox, FALSE, FALSE, 0);
 
     // Stages frame in f1b
-    GtkWidget *stages_frame = gtk_frame_new(NULL);
-    gtk_container_set_border_width(GTK_CONTAINER(stages_frame), FRAME_PADDING_PX);
-    GtkWidget *stages_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
-    gtk_container_add(GTK_CONTAINER(stages_frame), stages_vbox);
-    GtkWidget *stages_title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(stages_title), "<b>Stages</b>");
-    gtk_label_set_xalign(GTK_LABEL(stages_title), 0.0);
-    gtk_box_pack_start(GTK_BOX(stages_vbox), stages_title, FALSE, FALSE, 0);
-    // Add a vertical list of all available stage names
-    for (size_t i = 0; i < data->config_stages.size(); ++i) {
-        GtkWidget* stage_label = gtk_label_new(NULL);
-        data->stage_labels.push_back(stage_label);
-        gtk_label_set_xalign(GTK_LABEL(stage_label), 0.0);
+    if (data->explicit_stages) {
+        GtkWidget *stages_frame = gtk_frame_new(NULL);
+        gtk_container_set_border_width(GTK_CONTAINER(stages_frame), FRAME_PADDING_PX);
+        GtkWidget *stages_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
+        gtk_container_add(GTK_CONTAINER(stages_frame), stages_vbox);
+        GtkWidget *stages_title = gtk_label_new(NULL);
+        gtk_label_set_markup(GTK_LABEL(stages_title), "<b>Stages</b>");
+        gtk_label_set_xalign(GTK_LABEL(stages_title), 0.0);
+        gtk_box_pack_start(GTK_BOX(stages_vbox), stages_title, FALSE, FALSE, 0);
+        // Add a vertical list of all available stage names
+        for (size_t i = 0; i < data->config_stages.size(); ++i) {
+            GtkWidget* stage_label = gtk_label_new(NULL);
+            data->stage_labels.push_back(stage_label);
+            gtk_label_set_xalign(GTK_LABEL(stage_label), 0.0);
 
-        GtkWidget* eb = gtk_event_box_new();
-        gtk_container_add(GTK_CONTAINER(eb), stage_label);
-        g_object_set_data(G_OBJECT(eb), "idx", GINT_TO_POINTER(i));
-        
-        g_signal_connect(eb, "button-press-event", G_CALLBACK(+[](GtkWidget* w, GdkEventButton* ev, gpointer d) -> gboolean {
-            AppData* ad = (AppData*)d;
-            if (ad->global_recording) return FALSE;
-            int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "idx"));
-            ad->current_stage_idx = idx;
-            update_stage_highlighting(ad);
-            return TRUE;
-        }), data);
+            GtkWidget* eb = gtk_event_box_new();
+            gtk_container_add(GTK_CONTAINER(eb), stage_label);
+            g_object_set_data(G_OBJECT(eb), "idx", GINT_TO_POINTER(i));
+            
+            g_signal_connect(eb, "button-press-event", G_CALLBACK(+[](GtkWidget* w, GdkEventButton* ev, gpointer d) -> gboolean {
+                AppData* ad = (AppData*)d;
+                if (ad->global_recording) return FALSE;
+                int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "idx"));
+                ad->current_stage_idx = idx;
+                update_stage_highlighting(ad);
+                return TRUE;
+            }), data);
 
-        gtk_box_pack_start(GTK_BOX(stages_vbox), eb, FALSE, FALSE, 0);
+            gtk_box_pack_start(GTK_BOX(stages_vbox), eb, FALSE, FALSE, 0);
+        }
+        update_stage_highlighting(data);
+        gtk_box_pack_start(GTK_BOX(f1b_vbox), stages_frame, TRUE, TRUE, 0);
     }
-    update_stage_highlighting(data);
-    gtk_box_pack_start(GTK_BOX(f1b_vbox), stages_frame, TRUE, TRUE, 0);
 
     // f2: bottom bar for recording/quit
     GtkWidget *f2_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, BOX_SPACING_PX);
@@ -328,6 +346,32 @@ void create_main_window(AppData* data) {
     data->audio_level_bar = gtk_level_bar_new();
     gtk_level_bar_set_min_value(GTK_LEVEL_BAR(data->audio_level_bar), 0.0);
     gtk_level_bar_set_max_value(GTK_LEVEL_BAR(data->audio_level_bar), 1.0);
+    gtk_widget_set_size_request(data->audio_level_bar, 100, 10);
+    gtk_box_pack_start(GTK_BOX(audio_ctrl_hbox), data->audio_level_bar, TRUE, TRUE, 0);
+
+    // --- ROS Bag Frame ---
+    if (!data->ros_topics.empty()) {
+        GtkWidget *bag_frame = gtk_frame_new(NULL);
+        gtk_container_set_border_width(GTK_CONTAINER(bag_frame), FRAME_PADDING_PX);
+        gtk_box_pack_start(GTK_BOX(f1a_vbox), bag_frame, FALSE, FALSE, 0);
+        GtkWidget *bag_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
+        gtk_container_add(GTK_CONTAINER(bag_frame), bag_vbox);
+
+        GtkWidget *bag_label = gtk_label_new(NULL);
+        gtk_label_set_markup(GTK_LABEL(bag_label), "<b>ROS Bag</b>");
+        gtk_label_set_xalign(GTK_LABEL(bag_label), 0.0);
+        gtk_widget_set_margin_start(bag_label, WIDGET_MARGIN_PX);
+        gtk_box_pack_start(GTK_BOX(bag_vbox), bag_label, FALSE, FALSE, 0);
+
+        GtkWidget *bag_scroll_stats = gtk_label_new("Topics: 0/0\nMessages: 0");
+        gtk_label_set_justify(GTK_LABEL(bag_scroll_stats), GTK_JUSTIFY_LEFT);
+        gtk_label_set_xalign(GTK_LABEL(bag_scroll_stats), 0.0);
+        gtk_widget_set_margin_start(bag_scroll_stats, WIDGET_MARGIN_PX);
+        gtk_widget_set_margin_bottom(bag_scroll_stats, WIDGET_MARGIN_PX);
+        
+        gtk_box_pack_start(GTK_BOX(bag_vbox), bag_scroll_stats, FALSE, FALSE, 0);
+        data->bag_stats_label = bag_scroll_stats;
+    }
     gtk_level_bar_set_mode(GTK_LEVEL_BAR(data->audio_level_bar), GTK_LEVEL_BAR_MODE_CONTINUOUS);
     // Add typical VU colors
     gtk_level_bar_add_offset_value(GTK_LEVEL_BAR(data->audio_level_bar), GTK_LEVEL_BAR_OFFSET_LOW, 0.4);
@@ -420,6 +464,16 @@ void start_ui_update_loop(AppData* data) {
                 }
             }
         }
+        
+        // Update Bag Stats
+        if (ad->bag_stats_label && GTK_IS_LABEL(ad->bag_stats_label)) {
+            char buf[256];
+            std::lock_guard<std::mutex> lock(ad->data_mutex);
+            snprintf(buf, sizeof(buf), "Topics: %d/%lu\nMessages: %lld", 
+                     ad->bag_topics_found, ad->ros_topics.size(), ad->bag_messages_recorded);
+            gtk_label_set_text(GTK_LABEL(ad->bag_stats_label), buf);
+        }
+
         return G_SOURCE_CONTINUE;
     }, data);
 }

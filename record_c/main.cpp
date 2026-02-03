@@ -9,12 +9,22 @@
 #include <gst/gst.h>
 #include <json/json.h>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <glib-unix.h>
 
 #include "context.hpp"
 #include "pipeline.hpp"
 #include "ui.hpp"
 #include "ros_node.hpp"
 
+
+// Signal handler for Ctrl+C
+static gboolean on_sigint(gpointer user_data) {
+    AppData *data = static_cast<AppData*>(user_data);
+    data->is_quitting = true;
+    gtk_main_quit();
+    return FALSE;
+}
 
 int main(int argc, char *argv[]) {
     gtk_init(&argc, &argv); 
@@ -83,10 +93,19 @@ int main(int argc, char *argv[]) {
         data.data_directory = root.get("data_directory", data.data_directory).asString();
         data.enable_audio = data.enable_audio || root.get("enable_audio", false).asBool();
         if (root.isMember("stages")) {
+            data.explicit_stages = true;
             for (const auto& s : root["stages"]) data.config_stages.push_back(s.asString());
+        }
+        if (root.isMember("ros_topics")) {
+            for (const auto& t : root["ros_topics"]) {
+                data.ros_topics.push_back(t.asString());
+            }
         }
     }
     if (data.config_stages.empty()) data.config_stages.push_back("stage");
+
+    // Setup ROS topic monitoring if topics are requested
+    setup_ros_monitoring(&data);
 
     data.session_dir = data.data_directory + "/" + data.start_timestamp;
     g_mkdir_with_parents(data.session_dir.c_str(), 0777);
@@ -104,6 +123,9 @@ int main(int argc, char *argv[]) {
     create_audio_pipeline(&data);
     for (auto s : data.streams) gst_element_set_state(s->pipeline, GST_STATE_PLAYING);
     
+    // Handle Ctrl+C
+    g_unix_signal_add(SIGINT, on_sigint, &data);
+
     start_ui_update_loop(&data);
     
     gtk_main();
