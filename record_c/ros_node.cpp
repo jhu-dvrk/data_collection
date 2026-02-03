@@ -101,7 +101,7 @@ void setup_ros_monitoring(AppData* ad) {
 
             if (topic_names_and_types.count(topic)) {
                 std::string type = topic_names_and_types[topic][0]; 
-                std::cout << "Found topic to record: " << topic << " (" << type << ")" << std::endl;
+                // Removed print found topic
                 
                 auto callback = [ad, topic, type](std::shared_ptr<rclcpp::SerializedMessage> msg) {
                     std::lock_guard<std::mutex> lock(ad->data_mutex);

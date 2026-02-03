@@ -21,6 +21,7 @@ find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-video-1.0 gstreamer-app-1.0)
 pkg_check_modules(GTK REQUIRED gtk+-3.0)
+pkg_check_modules(GTKMM REQUIRED gtkmm-3.0)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
 # C++ Executable: record_c
@@ -40,11 +41,13 @@ ament_target_dependencies(record_c
 target_include_directories(record_c PRIVATE
   ${GST_INCLUDE_DIRS}
   ${GTK_INCLUDE_DIRS}
+  ${GTKMM_INCLUDE_DIRS}
   ${JSONCPP_INCLUDE_DIRS}
 )
 target_link_libraries(record_c
   ${GST_LIBRARIES}
   ${GTK_LIBRARIES}
+  ${GTKMM_LIBRARIES}
   ${JSONCPP_LIBRARIES}
 )
 

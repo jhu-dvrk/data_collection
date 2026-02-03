@@ -170,9 +170,11 @@ void create_audio_pipeline(AppData* data) {
         data->audio_pipeline = NULL;
     }
 
-    data->audio_pipeline = gst_parse_launch("pulsesrc name=asrc ! audioconvert ! audioresample ! level name=lvl ! tee name=at "
-                                            "at. ! queue ! fakesink sync=false async=false "
-                                            "at. ! queue ! valve name=av drop=true ! wavenc ! filesink name=asink sync=false async=false", NULL);
+    std::string apstr = "pulsesrc name=asrc ! audioconvert ! audioresample ! level name=lvl ! tee name=at "
+                        "at. ! queue ! fakesink sync=false async=false "
+                        "at. ! queue ! valve name=av drop=true ! wavenc ! filesink name=asink sync=false async=false";
+    data->audio_pipeline_desc = apstr;
+    data->audio_pipeline = gst_parse_launch(apstr.c_str(), NULL);
     if (data->audio_pipeline) {
         GstElement *lvl = gst_bin_get_by_name(GST_BIN(data->audio_pipeline), "lvl");
         if (lvl) {
@@ -222,6 +224,7 @@ VideoStream* create_video_stream(AppData* data, const Json::Value& v) {
     std::string pstr = v["stream"].asString() + " do-timestamp=true ! " + caps + ts_overlay + " ! tee name=t "
         "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! textoverlay name=rec_text text=\"\" valignment=top halignment=left font-desc=\"Sans, 24\" ! gtksink name=sink sync=false async=false "
         "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v["encoding"]) + " ! queue max-size-buffers=1 leaky=downstream ! mp4mux ! filesink name=muxer sync=false async=false";
+    s->pipeline_desc = pstr;
     s->pipeline = gst_parse_launch(pstr.c_str(), NULL);
     if (!s->pipeline) { delete s; return NULL; }
 

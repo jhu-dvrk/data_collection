@@ -30,6 +30,7 @@ struct VideoStream {
     GtkWidget *record_checkbox;
     GtkWidget *stats_label;
     std::string output_video, output_json;
+    std::string pipeline_desc;
     std::vector<VideoStage> stages;
     bool is_recording;
     bool record_enabled;
@@ -61,6 +62,7 @@ struct AppData {
     GtkWidget *window, *record_button, *data_dir_entry, *audio_level_bar, *audio_enable_checkbox;
     GtkWidget *audio_src_combo, *stages_combo, *session_entry, *grid;
     std::string data_directory, session_dir, start_timestamp, audio_output_json;
+    std::string audio_pipeline_desc;
     std::vector<VideoStage> audio_stages;
     std::vector<std::string> config_stages;
     std::vector<GtkWidget*> stage_labels;

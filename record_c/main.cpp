@@ -5,7 +5,7 @@
 #include <thread>
 #include <ctime>
 
-#include <gtk/gtk.h>
+#include <gtkmm.h>
 #include <gst/gst.h>
 #include <json/json.h>
 #include <rclcpp/rclcpp.hpp>
@@ -22,13 +22,17 @@
 static gboolean on_sigint(gpointer user_data) {
     AppData *data = static_cast<AppData*>(user_data);
     data->is_quitting = true;
-    gtk_main_quit();
+    gtk_main_quit(); 
+    // Gtk::Main::quit(); // Could use this too
     return FALSE;
 }
 
 int main(int argc, char *argv[]) {
-    gtk_init(&argc, &argv); 
+    // Initialize GStreamer first (strips GST args)
     gst_init(&argc, &argv);
+
+    // Initialize Gtkmm (strips GTK args)
+    Gtk::Main kit(argc, argv);
     
     AppData data; 
     std::vector<std::string> configs;
@@ -53,7 +57,10 @@ int main(int argc, char *argv[]) {
             configs.push_back(argv[i]);
         }
     }
-    if (configs.empty()) return 1;
+    if (configs.empty()) {
+        std::cerr << "Usage: " << argv[0] << " -c <scan_config.json> [options]" << std::endl;
+        return 1;
+    }
 
     // ROS 2 Initialization
     rclcpp::init(argc, argv);
@@ -117,8 +124,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    create_main_window(&data);
-    gtk_widget_show_all(data.window);
+    // Initialize UI Window
+    MainWindow window(&data);
     
     create_audio_pipeline(&data);
     for (auto s : data.streams) gst_element_set_state(s->pipeline, GST_STATE_PLAYING);
@@ -126,8 +133,9 @@ int main(int argc, char *argv[]) {
     // Handle Ctrl+C
     g_unix_signal_add(SIGINT, on_sigint, &data);
 
-    start_ui_update_loop(&data);
+    // Run Main Loop
+    // start_ui_update_loop(&data); // Replaced by MainWindow timer
+    Gtk::Main::run(window);
     
-    gtk_main();
     return 0;
 }

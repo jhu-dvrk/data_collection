@@ -3,68 +3,421 @@
 #include "ros_node.hpp"
 
 #include <iostream>
+#include <iomanip>
 #include <fstream>
-#include <memory>
-#include <sstream>
-#include <gtk/gtk.h>
+#include <gtkmm.h>
 #include <gst/gst.h>
-#include <json/json.h>
+#include <gst/video/videooverlay.h>
+#include <gdk/gdkx.h>
 #include <rclcpp/rclcpp.hpp>
 
-void update_stage_highlighting(AppData *data) {
-    for (size_t i = 0; i < data->stage_labels.size(); ++i) {
-        if ((int)i == data->current_stage_idx) {
-            gchar* markup = g_markup_printf_escaped("<span foreground=\"#0055ff\"><b>%s</b></span>", data->config_stages[i].c_str());
-            gtk_label_set_markup(GTK_LABEL(data->stage_labels[i]), markup);
-            g_free(markup);
+static MainWindow* g_main_window_instance = nullptr;
+
+// C-compatible callback for ROS node
+extern "C" gboolean toggle_recording_idle(gpointer) {
+    if (g_main_window_instance) {
+        g_main_window_instance->trigger_record_toggle();
+    }
+    return FALSE; // Remove source
+}
+
+MainWindow::MainWindow(AppData* data)
+    : m_data(data),
+      m_main_vbox(Gtk::ORIENTATION_VERTICAL, BOX_SPACING_PX),
+      m_top_hbox(Gtk::ORIENTATION_HORIZONTAL, BOX_SPACING_PX),
+      m_session_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
+      m_stages_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
+      m_audio_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
+      m_audio_ctrl_hbox(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX),
+      m_bag_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
+      m_bottom_hbox(Gtk::ORIENTATION_HORIZONTAL, BOX_SPACING_PX),
+      m_record_button("Start Recording"),
+      m_quit_button("Quit")
+{
+    set_title("Data Collection Recorder");
+    set_default_size(1024, 768);
+    set_border_width(WINDOW_BORDER_PX);
+    
+    // Sync AppData pointer for legacy C callbacks
+    m_data->window = (GtkWidget*)this->gobj();
+
+    add(m_main_vbox);
+    
+    // Top section: Left (Session/Audio/Streams) - Right (Stages)
+    m_main_vbox.pack_start(m_top_hbox, Gtk::PACK_EXPAND_WIDGET);
+    
+    // Left side container
+    Gtk::Box *f1a_vbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, BOX_SPACING_PX));
+    m_top_hbox.pack_start(*f1a_vbox, Gtk::PACK_EXPAND_WIDGET);
+
+    // --- Session Frame ---
+    Gtk::Label* session_lbl = Gtk::manage(new Gtk::Label());
+    session_lbl->set_markup("<b>Session</b>");
+    m_session_frame.set_label_widget(*session_lbl);
+    m_session_frame.set_shadow_type(Gtk::SHADOW_ETCHED_IN);
+    m_session_frame.add(m_session_vbox);
+    m_session_vbox.set_border_width(FRAME_PADDING_PX);
+    f1a_vbox->pack_start(m_session_frame, Gtk::PACK_SHRINK);
+
+    // Session Directory
+    Gtk::Box* dir_hbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
+    m_session_vbox.pack_start(*dir_hbox, Gtk::PACK_SHRINK);
+    dir_hbox->pack_start(*Gtk::manage(new Gtk::Label("Directory:")), Gtk::PACK_SHRINK);
+    
+    m_data_dir_entry.set_text(m_data->data_directory);
+    m_data_dir_entry.set_sensitive(false);
+    dir_hbox->pack_start(m_data_dir_entry, Gtk::PACK_EXPAND_WIDGET);
+    
+    // Current Session Name
+    Gtk::Box* sess_hbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
+    m_session_vbox.pack_start(*sess_hbox, Gtk::PACK_SHRINK);
+    sess_hbox->pack_start(*Gtk::manage(new Gtk::Label("Name:")), Gtk::PACK_SHRINK);
+    
+    m_session_entry.set_text(m_data->session_dir);
+    m_session_entry.set_sensitive(false);
+    sess_hbox->pack_start(m_session_entry, Gtk::PACK_EXPAND_WIDGET);
+
+    // --- Audio Frame ---
+    Gtk::Label* audio_lbl = Gtk::manage(new Gtk::Label());
+    audio_lbl->set_markup("<b>Audio</b>");
+    m_audio_frame.set_label_widget(*audio_lbl);
+    m_audio_frame.add(m_audio_vbox);
+    m_audio_vbox.set_border_width(FRAME_PADDING_PX);
+    f1a_vbox->pack_start(m_audio_frame, Gtk::PACK_SHRINK);
+
+    m_audio_vbox.pack_start(m_audio_ctrl_hbox, Gtk::PACK_SHRINK);
+    m_audio_enable_check.set_label("Record");
+    m_audio_enable_check.set_active(true);
+    // m_audio_enable_check.signal_toggled().connect(sigc::mem_fun(*this, &MainWindow::on_audio_enable_toggled));
+    m_audio_ctrl_hbox.pack_start(m_audio_enable_check, Gtk::PACK_SHRINK);
+
+    populate_audio_sources();
+    // m_audio_src_combo.signal_changed().connect(sigc::mem_fun(*this, &MainWindow::on_audio_source_changed));
+    m_audio_ctrl_hbox.pack_start(m_audio_src_combo, Gtk::PACK_EXPAND_WIDGET);
+
+    m_audio_level_bar.set_min_value(0.0);
+    m_audio_level_bar.set_max_value(1.0);
+    m_audio_level_bar.add_offset_value(GTK_LEVEL_BAR_OFFSET_LOW, 0.4);
+    m_audio_level_bar.add_offset_value(GTK_LEVEL_BAR_OFFSET_HIGH, 0.8);
+    m_audio_vbox.pack_start(m_audio_level_bar, Gtk::PACK_SHRINK);
+
+    // Expose raw pointers for non-gtkmm legacy code
+    m_data->audio_level_bar = (GtkWidget*)m_audio_level_bar.gobj();
+    m_data->audio_enable_checkbox = (GtkWidget*)m_audio_enable_check.gobj();
+    m_data->audio_src_combo = (GtkWidget*)m_audio_src_combo.gobj();
+
+
+    // --- ROS Bag Frame ---
+    if (!m_data->ros_topics.empty()) {
+        Gtk::Label* bag_lbl = Gtk::manage(new Gtk::Label());
+        bag_lbl->set_markup("<b>ROS Bag</b>");
+        m_bag_frame.set_label_widget(*bag_lbl);
+        m_bag_frame.add(m_bag_vbox);
+        m_bag_vbox.set_border_width(FRAME_PADDING_PX);
+        f1a_vbox->pack_start(m_bag_frame, Gtk::PACK_SHRINK);
+        
+        Gtk::Box* stats_box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
+        m_bag_vbox.pack_start(*stats_box, Gtk::PACK_SHRINK);
+
+        m_bag_stats_label.set_text("Topics: 0/0\nMessages: 0");
+        m_bag_stats_label.set_alignment(0.0, 0.5);
+        stats_box->pack_start(m_bag_stats_label, Gtk::PACK_EXPAND_WIDGET);
+
+        m_bag_details_button.set_label("?");
+        m_bag_details_button.set_tooltip_text("Show Topic Details");
+        m_bag_details_button.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_bag_details_clicked));
+        stats_box->pack_start(m_bag_details_button, Gtk::PACK_SHRINK);
+        
+        m_data->bag_stats_label = (GtkWidget*)m_bag_stats_label.gobj();
+    }
+
+    // --- Video Streams Grid ---
+    Gtk::Label* streams_lbl = Gtk::manage(new Gtk::Label());
+    streams_lbl->set_markup("<b>Video Streams</b>");
+    m_streams_frame.set_label_widget(*streams_lbl);
+    m_streams_frame.add(m_streams_grid);
+    m_streams_grid.set_column_spacing(WIDGET_SPACING_PX);
+    m_streams_grid.set_row_spacing(WIDGET_SPACING_PX);
+    m_streams_grid.set_border_width(FRAME_PADDING_PX);
+    f1a_vbox->pack_start(m_streams_frame, Gtk::PACK_EXPAND_WIDGET);
+
+    int col = 0, row = 0;
+    for (auto s : m_data->streams) {
+        StreamWidgets sw = create_stream_widget(s);
+        m_streams_grid.attach(*sw.container, col, row, 1, 1);
+        col++;
+        if (col > 1) { col = 0; row++; }
+    }
+
+
+    // --- Stages Frame (Right Side) ---
+    if (m_data->explicit_stages) {
+        Gtk::Label* stages_lbl = Gtk::manage(new Gtk::Label());
+        stages_lbl->set_markup("<b>Stages</b>");
+        m_stages_frame.set_label_widget(*stages_lbl);
+        m_stages_frame.add(m_stages_vbox);
+        m_stages_vbox.set_border_width(FRAME_PADDING_PX);
+        m_top_hbox.pack_start(m_stages_frame, Gtk::PACK_SHRINK); 
+
+        for (size_t i = 0; i < m_data->config_stages.size(); ++i) {
+            Gtk::EventBox* eb = Gtk::manage(new Gtk::EventBox());
+            Gtk::Label* lbl = Gtk::manage(new Gtk::Label(m_data->config_stages[i]));
+            lbl->set_alignment(0.0, 0.5);
+            eb->add(*lbl);
+            m_stages_vbox.pack_start(*eb, Gtk::PACK_SHRINK);
+            m_stage_labels.push_back(lbl);
+            
+            // Legacy sync
+            m_data->stage_labels.push_back((GtkWidget*)lbl->gobj());
+
+            eb->signal_button_press_event().connect([this, i](GdkEventButton*) {
+                if (!m_data->global_recording) {
+                    m_data->current_stage_idx = i;
+                    this->update_stage_highlighting();
+                }
+                return true;
+            });
+        }
+        update_stage_highlighting();
+    }
+
+
+    // --- Bottom Controls ---
+    m_main_vbox.pack_end(m_bottom_hbox, Gtk::PACK_SHRINK);
+    
+    m_record_button.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_record_toggle));
+    m_bottom_hbox.pack_start(m_record_button, Gtk::PACK_EXPAND_WIDGET);
+    
+    m_quit_button.signal_clicked().connect(sigc::mem_fun(*this, &Gtk::Window::close));
+    m_bottom_hbox.pack_end(m_quit_button, Gtk::PACK_SHRINK);
+
+    m_data->record_button = (GtkWidget*)m_record_button.gobj();
+
+    show_all_children();
+    
+    m_update_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &MainWindow::on_ui_update), 33);
+    
+    g_main_window_instance = this;
+}
+
+MainWindow::~MainWindow() {
+    g_main_window_instance = nullptr;
+    m_update_conn.disconnect();
+
+    // Shutdown logic (moved from on_window_destroy_cb)
+    m_data->is_quitting = true;
+    
+    // Force stop recording logic manual override (since toggle checks is_quitting)
+    // Actually, we just need to ensure valves are open and files are written.
+    if (m_data->global_recording) {
+        // Stop ROS Bag
+        close_bag_writer(m_data);
+    }
+
+    // Unblock valves to let EOS pass through
+    if (m_data->audio_valve) g_object_set(m_data->audio_valve, "drop", FALSE, NULL);
+    for (auto s : m_data->streams) if (s->valve) g_object_set(s->valve, "drop", FALSE, NULL);
+
+    if (!m_data->audio_stages.empty()) {
+        Json::Value root; root["name"] = "audio";
+        root["audio_file"] = "audio_" + m_data->start_timestamp + ".wav";
+        root["gstreamer_pipeline"] = m_data->audio_pipeline_desc;
+        Json::Value stagesArr(Json::arrayValue);
+        for (const auto& seg : m_data->audio_stages) {
+            Json::Value segNode; segNode["stage"] = seg.stage;
+            Json::Value tsArr(Json::arrayValue);
+            for (long long t : seg.timestamps) tsArr.append((Json::Value::Int64)t);
+            segNode["timestamps_ns"] = tsArr;
+            stagesArr.append(segNode);
+        }
+        root["stages"] = stagesArr;
+        std::ofstream os(m_data->audio_output_json); Json::StreamWriterBuilder b;
+        std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
+    }
+
+    for (auto s : m_data->streams) {
+        if (!s->stages.empty()) {
+            Json::Value root; root["name"] = s->name;
+            root["video_file"] = s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
+            root["gstreamer_pipeline"] = s->pipeline_desc;
+            Json::Value stagesArr(Json::arrayValue);
+            for (const auto& seg : s->stages) {
+                Json::Value segNode; segNode["stage"] = seg.stage;
+                Json::Value tsArr(Json::arrayValue);
+                for (long long t : seg.timestamps) tsArr.append((Json::Value::Int64)t);
+                segNode["timestamps_ns"] = tsArr;
+                stagesArr.append(segNode);
+            }
+            root["stages"] = stagesArr;
+            std::ofstream os(s->output_json); Json::StreamWriterBuilder b;
+            std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
+        }
+        gst_element_send_event(s->pipeline, gst_event_new_eos());
+    }
+    if (m_data->audio_pipeline) gst_element_send_event(m_data->audio_pipeline, gst_event_new_eos());
+    
+    // Shutdown ROS 2
+    if (rclcpp::ok()) rclcpp::shutdown();
+    
+    std::cout << "Cleanup finished in MainWindow destructor." << std::endl;
+}
+
+MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream* s) {
+    StreamWidgets sw;
+    sw.container = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX));
+    sw.container->set_hexpand(true);
+    sw.container->set_vexpand(true);
+    
+    // Header: Name (Bold) <Space> Record [x]
+    Gtk::Box* header_hbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
+    sw.container->pack_start(*header_hbox, Gtk::PACK_SHRINK);
+
+    Gtk::Label* name_label = Gtk::manage(new Gtk::Label());
+    name_label->set_markup("<b>" + s->name + "</b>");
+    name_label->set_alignment(0.0, 0.5);
+    header_hbox->pack_start(*name_label, Gtk::PACK_EXPAND_WIDGET);
+
+    sw.record_check = Gtk::manage(new Gtk::CheckButton("Record"));
+    sw.record_check->set_active(true);
+    header_hbox->pack_start(*sw.record_check, Gtk::PACK_SHRINK);
+    s->record_checkbox = (GtkWidget*)sw.record_check->gobj();
+
+    // Preview
+    Gtk::Frame* frame = Gtk::manage(new Gtk::Frame());
+    if (s->preview_widget) {
+        Gtk::Widget* gtkmm_preview = Glib::wrap(s->preview_widget);
+        gtkmm_preview->set_hexpand(true);
+        gtkmm_preview->set_vexpand(true);
+        gtkmm_preview->set_size_request(640, 480);
+        frame->add(*gtkmm_preview);
+    } else {
+        sw.preview = Gtk::manage(new Gtk::Image());
+        frame->add(*sw.preview);
+    }
+    sw.container->pack_start(*frame, Gtk::PACK_EXPAND_WIDGET); // Issue 5: Expand preview
+
+    // Stats
+    sw.stats = Gtk::manage(new Gtk::Label("Ready"));
+    sw.stats->set_alignment(0.0, 0.5);
+    // sw.stats->override_font(Pango::FontDescription("Monospace 9")); // Optional?
+    sw.container->pack_start(*sw.stats, Gtk::PACK_SHRINK);
+    s->stats_label = (GtkWidget*)sw.stats->gobj();
+
+    return sw;
+}
+
+void MainWindow::populate_audio_sources() {
+    m_audio_src_combo.remove_all();
+    GstDeviceMonitor* mon = gst_device_monitor_new();
+    gst_device_monitor_add_filter(mon, "Audio/Source", NULL);
+    GList* devices = gst_device_monitor_get_devices(mon);
+    int idx = 0, default_idx = 0;
+    
+    for (GList* l = devices; l; l = l->next) {
+        GstDevice* d = (GstDevice*)l->data;
+        gchar* name = gst_device_get_display_name(d);
+        GstStructure* p = gst_device_get_properties(d);
+        const char* pulse_name = gst_structure_get_string(p, "device.name");
+        
+        if (pulse_name) {
+            m_audio_src_combo.append(pulse_name, name);
+            if (!g_str_has_suffix(pulse_name, ".monitor") && strstr(name, "Default")) {
+                default_idx = idx;
+            }
+            idx++;
+        }
+        g_free(name); if (p) gst_structure_free(p);
+    }
+    g_list_free_full(devices, (GDestroyNotify)gst_object_unref); 
+    gst_object_unref(mon);
+    m_audio_src_combo.set_active(default_idx);
+}
+
+void MainWindow::update_stage_highlighting() {
+    for (size_t i = 0; i < m_stage_labels.size(); ++i) {
+        if ((int)i == m_data->current_stage_idx) {
+            m_stage_labels[i]->set_markup("<span foreground=\"#0055ff\"><b>" + m_data->config_stages[i] + "</b></span>");
         } else {
-            gtk_label_set_text(GTK_LABEL(data->stage_labels[i]), data->config_stages[i].c_str());
+            m_stage_labels[i]->set_text(m_data->config_stages[i]);
         }
     }
 }
 
-void toggle_recording(AppData *data) {
-    if (data->is_quitting) return; // Ignore calls during shutdown
+void MainWindow::on_bag_details_clicked() {
+    Gtk::Dialog dialog("ROS Topic Details", *this, true);
+    Gtk::Box* content = dialog.get_content_area();
     
-    data->global_recording = !data->global_recording;
+    std::stringstream ss;
+    
+    {
+        std::lock_guard<std::mutex> lock(m_data->data_mutex);
+        ss << "<b>Subscribed Topics (" << m_data->bag_topics_found << "/" << m_data->ros_topics.size() << "):</b>\n";
+        for (const auto& topic : m_data->ros_topics) {
+            bool found = m_data->subscribed_topics.count(topic);
+            if (found) {
+                ss << "<span foreground='green'>✔ " << topic << "</span>\n";
+            } else {
+                ss << "<span foreground='red'>✘ " << topic << "</span>\n";
+            }
+        }
+    }
+    
+    Gtk::Label* lbl = Gtk::manage(new Gtk::Label());
+    lbl->set_markup(ss.str());
+    lbl->set_padding(10, 10);
+    content->add(*lbl);
+    
+    dialog.add_button("Close", Gtk::RESPONSE_CLOSE);
+    dialog.show_all_children();
+    dialog.run();
+}
 
-    int active_idx = data->current_stage_idx;
-    std::string base_stage = data->config_stages.empty() ? "stage" : data->config_stages[active_idx];
+void MainWindow::trigger_record_toggle() {
+    on_record_toggle();
+}
 
-    if (data->global_recording) {
+void MainWindow::on_record_toggle() {
+    if (m_data->is_quitting) return;
+
+    m_data->global_recording = !m_data->global_recording;
+
+    int active_idx = m_data->current_stage_idx;
+    std::string base_stage = m_data->config_stages.empty() ? "stage" : m_data->config_stages[active_idx];
+
+    if (m_data->global_recording) {
         char stage_buf[128];
-        snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", base_stage.c_str(), data->session_stage_cycle_count);
+        snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", base_stage.c_str(), m_data->session_stage_cycle_count);
         std::string final_stage_name = stage_buf;
 
-        if (data->audio_valve) {
-            bool audio_rec = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(data->audio_enable_checkbox));
-            data->audio_is_recording = audio_rec;
-            g_object_set(data->audio_valve, "drop", !audio_rec, NULL);
-            if (audio_rec) data->audio_stages.push_back({final_stage_name, {}});
+        if (m_data->audio_valve) {
+            bool audio_rec = m_audio_enable_check.get_active();
+            m_data->audio_is_recording = audio_rec;
+            g_object_set(m_data->audio_valve, "drop", !audio_rec, NULL);
+            if (audio_rec) m_data->audio_stages.push_back({final_stage_name, {}});
         }
         
         // Start ROS Bag
-        if (!data->ros_topics.empty()) {
-             std::string bag_path = data->session_dir + "/rosbag_" + final_stage_name;
-             open_bag_writer(data, bag_path);
+        if (!m_data->ros_topics.empty()) {
+             std::string bag_path = m_data->session_dir + "/rosbag_" + final_stage_name;
+             open_bag_writer(m_data, bag_path);
         }
 
-        for (auto s : data->streams) {
+        for (auto s : m_data->streams) {
             bool stream_rec = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s->record_checkbox));
             s->is_recording = stream_rec;
             if (s->valve) g_object_set(s->valve, "drop", !stream_rec, NULL);
             if (stream_rec) s->stages.push_back({final_stage_name, {}});
         }
     } else {
-        if (data->audio_valve) {
-            data->audio_is_recording = false;
-            g_object_set(data->audio_valve, "drop", TRUE, NULL);
+         if (m_data->audio_valve) {
+            m_data->audio_is_recording = false;
+            g_object_set(m_data->audio_valve, "drop", TRUE, NULL);
         }
         
         // Stop ROS Bag
-        close_bag_writer(data);
+        close_bag_writer(m_data);
         
-        for (auto s : data->streams) {
+        for (auto s : m_data->streams) {
             if (!s->stages.empty()) {
                 s->last_run_stage_name = s->stages.back().stage;
                 s->last_run_frames_recorded = s->stages.back().timestamps.size();
@@ -82,398 +435,58 @@ void toggle_recording(AppData *data) {
             s->fps_frame_counter = 0;
         }
 
-        int num_stages = (int)data->config_stages.size();
+        int num_stages = (int)m_data->config_stages.size();
         if (num_stages > 0) {
             int next_idx = active_idx + 1;
             if (next_idx >= num_stages) {
                 next_idx = 0;
-                data->session_stage_cycle_count++;
+                m_data->session_stage_cycle_count++;
             }
-            data->current_stage_idx = next_idx;
+            m_data->current_stage_idx = next_idx;
         }
     }
 
-    gtk_button_set_label(GTK_BUTTON(data->record_button), data->global_recording ? "Stop Recording" : "Start Recording");
-    gtk_widget_set_sensitive(data->audio_enable_checkbox, !data->global_recording);
-    gtk_widget_set_sensitive(data->audio_src_combo, !data->global_recording);
-    for (auto s : data->streams) gtk_widget_set_sensitive(s->record_checkbox, !data->global_recording);
-    update_stage_highlighting(data);
-    // Redraw the window to update stage highlighting
-    gtk_widget_queue_draw(data->window);
-}
-
-gboolean toggle_recording_idle(gpointer user_data) {
-    AppData* ad = (AppData*)user_data;
-    toggle_recording(ad);
-    return G_SOURCE_REMOVE;
-}
-
-void populate_audio_sources(GtkComboBoxText* combo) {
-    gtk_combo_box_text_remove_all(combo);
-    GstDeviceMonitor* mon = gst_device_monitor_new();
-    gst_device_monitor_add_filter(mon, "Audio/Source", NULL);
-    GList* devices = gst_device_monitor_get_devices(mon);
-    int idx = 0, default_idx = 0;
-    for (GList* l = devices; l; l = l->next) {
-        GstDevice* d = (GstDevice*)l->data;
-        gchar* name = gst_device_get_display_name(d);
-        GstStructure* p = gst_device_get_properties(d);
-        const char* pulse_name = gst_structure_get_string(p, "device.name");
-        if (pulse_name) {
-            gtk_combo_box_text_append(combo, pulse_name, name);
-            if (!g_str_has_suffix(pulse_name, ".monitor") && strstr(name, "Default")) {
-                default_idx = idx;
-            }
-            idx++;
-        }
-        g_free(name); if (p) gst_structure_free(p);
+    m_record_button.set_label(m_data->global_recording ? "Stop Recording" : "Start Recording");
+    m_audio_enable_check.set_sensitive(!m_data->global_recording);
+    m_audio_src_combo.set_sensitive(!m_data->global_recording);
+    for (auto s : m_data->streams) {
+        gtk_widget_set_sensitive(s->record_checkbox, !m_data->global_recording);
     }
-    g_list_free_full(devices, (GDestroyNotify)gst_object_unref); gst_object_unref(mon);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(combo), default_idx);
-}
-
-
-void on_window_destroy_cb(GtkWidget *w, gpointer d) {
-    AppData *ad = (AppData *)d;
-    ad->is_quitting = true;
-    if (ad->global_recording) toggle_recording(ad);
     
-    // Unblock valves to let EOS pass through
-    if (ad->audio_valve) g_object_set(ad->audio_valve, "drop", FALSE, NULL);
-    for (auto s : ad->streams) if (s->valve) g_object_set(s->valve, "drop", FALSE, NULL);
-
-    if (!ad->audio_stages.empty()) {
-        Json::Value root; root["name"] = "audio";
-        root["audio_file"] = "audio_" + ad->start_timestamp + ".wav";
-        Json::Value stagesArr(Json::arrayValue);
-        for (const auto& seg : ad->audio_stages) {
-            Json::Value segNode; segNode["stage"] = seg.stage;
-            Json::Value tsArr(Json::arrayValue);
-            for (long long t : seg.timestamps) tsArr.append((Json::Value::Int64)t);
-            segNode["timestamps_ns"] = tsArr;
-            stagesArr.append(segNode);
-        }
-        root["stages"] = stagesArr;
-        std::ofstream os(ad->audio_output_json); Json::StreamWriterBuilder b;
-        std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
-    }
-
-    for (auto s : ad->streams) {
-        if (!s->stages.empty()) {
-            Json::Value root; root["name"] = s->name;
-            root["video_file"] = s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
-            Json::Value stagesArr(Json::arrayValue);
-            for (const auto& seg : s->stages) {
-                Json::Value segNode; segNode["stage"] = seg.stage;
-                Json::Value tsArr(Json::arrayValue);
-                for (long long t : seg.timestamps) tsArr.append((Json::Value::Int64)t);
-                segNode["timestamps_ns"] = tsArr;
-                stagesArr.append(segNode);
-            }
-            root["stages"] = stagesArr;
-            std::ofstream os(s->output_json); Json::StreamWriterBuilder b;
-            std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
-        }
-        gst_element_send_event(s->pipeline, gst_event_new_eos());
-    }
-    if (ad->audio_pipeline) gst_element_send_event(ad->audio_pipeline, gst_event_new_eos());
-    
-    gtk_widget_hide(w);
-
-    // Safety timeout: if EOS doesn't arrive in 3 seconds, force quit
-    g_timeout_add(3000, (GSourceFunc)+[](gpointer d) -> gboolean {
-        g_print("Shutdown timeout reached. Force exiting.\n");
-        gtk_main_quit();
-        return G_SOURCE_REMOVE;
-    }, NULL);
-
-    if (ad->streams.empty() && !ad->audio_pipeline) gtk_main_quit();
-    
-    // Shutdown ROS 2
-    if (rclcpp::ok()) rclcpp::shutdown();
+    update_stage_highlighting();
 }
 
-void create_main_window(AppData* data) {
-    data->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_default_size(GTK_WINDOW(data->window), 1024, 768);
-    g_signal_connect(data->window, "destroy", G_CALLBACK(on_window_destroy_cb), data);
-
-    // Main vertical split: f1 (top), f2 (bottom)
-    GtkWidget *main_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, BOX_SPACING_PX);
-    gtk_container_add(GTK_CONTAINER(data->window), main_vbox);
-    gtk_container_set_border_width(GTK_CONTAINER(main_vbox), WINDOW_BORDER_PX);
-
-    // f1: top horizontal split (f1a, f1b)
-    GtkWidget *f1_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, BOX_SPACING_PX);
-    gtk_box_pack_start(GTK_BOX(main_vbox), f1_hbox, TRUE, TRUE, 0);
-
-    // f1a: session, audio, video previews (vertical)
-    GtkWidget *f1a_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, BOX_SPACING_PX);
-    gtk_box_pack_start(GTK_BOX(f1_hbox), f1a_vbox, TRUE, TRUE, 0);
-
-    // f1b: stages (vertical)
-    GtkWidget *f1b_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, BOX_SPACING_PX);
-    gtk_box_pack_start(GTK_BOX(f1_hbox), f1b_vbox, FALSE, FALSE, 0);
-
-    // Stages frame in f1b
-    if (data->explicit_stages) {
-        GtkWidget *stages_frame = gtk_frame_new(NULL);
-        gtk_container_set_border_width(GTK_CONTAINER(stages_frame), FRAME_PADDING_PX);
-        GtkWidget *stages_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
-        gtk_container_add(GTK_CONTAINER(stages_frame), stages_vbox);
-        GtkWidget *stages_title = gtk_label_new(NULL);
-        gtk_label_set_markup(GTK_LABEL(stages_title), "<b>Stages</b>");
-        gtk_label_set_xalign(GTK_LABEL(stages_title), 0.0);
-        gtk_box_pack_start(GTK_BOX(stages_vbox), stages_title, FALSE, FALSE, 0);
-        // Add a vertical list of all available stage names
-        for (size_t i = 0; i < data->config_stages.size(); ++i) {
-            GtkWidget* stage_label = gtk_label_new(NULL);
-            data->stage_labels.push_back(stage_label);
-            gtk_label_set_xalign(GTK_LABEL(stage_label), 0.0);
-
-            GtkWidget* eb = gtk_event_box_new();
-            gtk_container_add(GTK_CONTAINER(eb), stage_label);
-            g_object_set_data(G_OBJECT(eb), "idx", GINT_TO_POINTER(i));
-            
-            g_signal_connect(eb, "button-press-event", G_CALLBACK(+[](GtkWidget* w, GdkEventButton* ev, gpointer d) -> gboolean {
-                AppData* ad = (AppData*)d;
-                if (ad->global_recording) return FALSE;
-                int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "idx"));
-                ad->current_stage_idx = idx;
-                update_stage_highlighting(ad);
-                return TRUE;
-            }), data);
-
-            gtk_box_pack_start(GTK_BOX(stages_vbox), eb, FALSE, FALSE, 0);
-        }
-        update_stage_highlighting(data);
-        gtk_box_pack_start(GTK_BOX(f1b_vbox), stages_frame, TRUE, TRUE, 0);
-    }
-
-    // f2: bottom bar for recording/quit
-    GtkWidget *f2_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, BOX_SPACING_PX);
-    gtk_box_pack_end(GTK_BOX(main_vbox), f2_hbox, FALSE, FALSE, 0);
-
-
-    // --- Session Frame ---
-    GtkWidget *session_frame = gtk_frame_new(NULL);
-    gtk_container_set_border_width(GTK_CONTAINER(session_frame), FRAME_PADDING_PX);
-    gtk_box_pack_start(GTK_BOX(f1a_vbox), session_frame, FALSE, FALSE, 0);
-    GtkWidget *session_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
-    gtk_container_add(GTK_CONTAINER(session_frame), session_vbox);
-    GtkWidget *session_title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(session_title), "<b>Session</b>");
-    gtk_label_set_xalign(GTK_LABEL(session_title), 0.0);
-    gtk_box_pack_start(GTK_BOX(session_vbox), session_title, FALSE, FALSE, 0);
-
-    // Session name entry (read-only)
-    GtkWidget *session_name_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX);
-    gtk_box_pack_start(GTK_BOX(session_vbox), session_name_hbox, FALSE, FALSE, 0);
-    GtkWidget *session_name_label = gtk_label_new("Name:");
-    gtk_widget_set_margin_start(session_name_label, WIDGET_MARGIN_PX);
-    gtk_widget_set_margin_end(session_name_label, WIDGET_MARGIN_PX);
-    gtk_box_pack_start(GTK_BOX(session_name_hbox), session_name_label, FALSE, FALSE, 0);
-    GtkWidget *session_name_entry = gtk_entry_new();
-    gtk_entry_set_text(GTK_ENTRY(session_name_entry), data->session_dir.c_str());
-    gtk_widget_set_sensitive(session_name_entry, FALSE);
-    gtk_widget_set_margin_start(session_name_entry, WIDGET_MARGIN_PX);
-    gtk_widget_set_margin_end(session_name_entry, WIDGET_MARGIN_PX);
-    gtk_box_pack_start(GTK_BOX(session_name_hbox), session_name_entry, TRUE, TRUE, 0);
-
-    // Directory row
-    GtkWidget *dir_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX);
-    gtk_box_pack_start(GTK_BOX(session_vbox), dir_hbox, FALSE, FALSE, 0);
-    GtkWidget *dir_label = gtk_label_new("Directory:");
-    gtk_widget_set_margin_start(dir_label, WIDGET_MARGIN_PX);
-    gtk_widget_set_margin_end(dir_label, WIDGET_MARGIN_PX);
-    gtk_box_pack_start(GTK_BOX(dir_hbox), dir_label, FALSE, FALSE, 0);
-    data->data_dir_entry = gtk_entry_new();
-    gtk_entry_set_text(GTK_ENTRY(data->data_dir_entry), data->data_directory.c_str());
-    gtk_widget_set_sensitive(data->data_dir_entry, FALSE);
-    gtk_widget_set_margin_start(data->data_dir_entry, WIDGET_MARGIN_PX);
-    gtk_widget_set_margin_end(data->data_dir_entry, WIDGET_MARGIN_PX);
-    gtk_box_pack_start(GTK_BOX(dir_hbox), data->data_dir_entry, FALSE, FALSE, 0);
-    GtkWidget *bbtn = gtk_button_new_with_label("Browse");
-    gtk_widget_set_margin_start(bbtn, WIDGET_MARGIN_PX);
-    gtk_widget_set_margin_end(bbtn, WIDGET_MARGIN_PX);
-    gtk_box_pack_start(GTK_BOX(dir_hbox), bbtn, FALSE, FALSE, 0);
-    g_signal_connect(bbtn, "clicked", G_CALLBACK(+[](GtkButton* b, gpointer d){
-        AppData* ad = (AppData*)d;
-        GtkWidget* dlg = gtk_file_chooser_dialog_new("Dir", GTK_WINDOW(ad->window), GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, "_Cancel", GTK_RESPONSE_CANCEL, "_Select", GTK_RESPONSE_ACCEPT, NULL);
-        if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
-            char* f = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
-            gtk_entry_set_text(GTK_ENTRY(ad->data_dir_entry), f);
-            g_free(f);
-        }
-        gtk_widget_destroy(dlg);
-    }), data);
-
-    // --- End Session Frame ---
-
-
-    GtkWidget *audio_frame = gtk_frame_new(NULL);
-    gtk_container_set_border_width(GTK_CONTAINER(audio_frame), FRAME_PADDING_PX);
-    gtk_box_pack_start(GTK_BOX(f1a_vbox), audio_frame, FALSE, FALSE, 0);
-    GtkWidget *audio_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
-    gtk_container_add(GTK_CONTAINER(audio_frame), audio_vbox);
-
-    GtkWidget *audio_header_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX);
-    gtk_box_pack_start(GTK_BOX(audio_vbox), audio_header_hbox, FALSE, FALSE, 0);
-
-    GtkWidget *audio_label = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(audio_label), "<b>Audio</b>");
-    gtk_label_set_xalign(GTK_LABEL(audio_label), 0.0);
-    gtk_widget_set_margin_start(audio_label, WIDGET_MARGIN_PX);
-    gtk_box_pack_start(GTK_BOX(audio_header_hbox), audio_label, TRUE, TRUE, 0);
-
-    data->audio_enable_checkbox = gtk_check_button_new_with_label("Record");
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(data->audio_enable_checkbox), data->enable_audio);
-    gtk_box_pack_start(GTK_BOX(audio_header_hbox), data->audio_enable_checkbox, FALSE, FALSE, 0);
-
-    GtkWidget *audio_ctrl_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    gtk_box_pack_start(GTK_BOX(audio_vbox), audio_ctrl_hbox, FALSE, FALSE, 0);
-    gtk_container_set_border_width(GTK_CONTAINER(audio_ctrl_hbox), WIDGET_MARGIN_PX);
-
-    data->audio_src_combo = gtk_combo_box_text_new();
-    populate_audio_sources(GTK_COMBO_BOX_TEXT(data->audio_src_combo));
-    gtk_box_pack_start(GTK_BOX(audio_ctrl_hbox), data->audio_src_combo, FALSE, FALSE, 0);
-    g_signal_connect(data->audio_src_combo, "changed", G_CALLBACK(+[](GtkComboBox* c, gpointer d) -> void {
-        AppData* ad = (AppData*)d;
-        if (ad->global_recording) return; 
-        create_audio_pipeline(ad);
-    }), data);
-
-    data->audio_level_bar = gtk_level_bar_new();
-    gtk_level_bar_set_min_value(GTK_LEVEL_BAR(data->audio_level_bar), 0.0);
-    gtk_level_bar_set_max_value(GTK_LEVEL_BAR(data->audio_level_bar), 1.0);
-    gtk_widget_set_size_request(data->audio_level_bar, 100, 10);
-    gtk_box_pack_start(GTK_BOX(audio_ctrl_hbox), data->audio_level_bar, TRUE, TRUE, 0);
-
-    // --- ROS Bag Frame ---
-    if (!data->ros_topics.empty()) {
-        GtkWidget *bag_frame = gtk_frame_new(NULL);
-        gtk_container_set_border_width(GTK_CONTAINER(bag_frame), FRAME_PADDING_PX);
-        gtk_box_pack_start(GTK_BOX(f1a_vbox), bag_frame, FALSE, FALSE, 0);
-        GtkWidget *bag_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
-        gtk_container_add(GTK_CONTAINER(bag_frame), bag_vbox);
-
-        GtkWidget *bag_label = gtk_label_new(NULL);
-        gtk_label_set_markup(GTK_LABEL(bag_label), "<b>ROS Bag</b>");
-        gtk_label_set_xalign(GTK_LABEL(bag_label), 0.0);
-        gtk_widget_set_margin_start(bag_label, WIDGET_MARGIN_PX);
-        gtk_box_pack_start(GTK_BOX(bag_vbox), bag_label, FALSE, FALSE, 0);
-
-        GtkWidget *bag_scroll_stats = gtk_label_new("Topics: 0/0\nMessages: 0");
-        gtk_label_set_justify(GTK_LABEL(bag_scroll_stats), GTK_JUSTIFY_LEFT);
-        gtk_label_set_xalign(GTK_LABEL(bag_scroll_stats), 0.0);
-        gtk_widget_set_margin_start(bag_scroll_stats, WIDGET_MARGIN_PX);
-        gtk_widget_set_margin_bottom(bag_scroll_stats, WIDGET_MARGIN_PX);
-        
-        gtk_box_pack_start(GTK_BOX(bag_vbox), bag_scroll_stats, FALSE, FALSE, 0);
-        data->bag_stats_label = bag_scroll_stats;
-    }
-    gtk_level_bar_set_mode(GTK_LEVEL_BAR(data->audio_level_bar), GTK_LEVEL_BAR_MODE_CONTINUOUS);
-    // Add typical VU colors
-    gtk_level_bar_add_offset_value(GTK_LEVEL_BAR(data->audio_level_bar), GTK_LEVEL_BAR_OFFSET_LOW, 0.4);
-    gtk_level_bar_add_offset_value(GTK_LEVEL_BAR(data->audio_level_bar), GTK_LEVEL_BAR_OFFSET_HIGH, 0.8);
+bool MainWindow::on_ui_update() {
+    if (m_data->is_quitting) return false;
     
-    gtk_widget_set_size_request(data->audio_level_bar, -1, 15);
-    gtk_box_pack_start(GTK_BOX(audio_ctrl_hbox), data->audio_level_bar, TRUE, TRUE, 0);
+    for (auto s : m_data->streams) {
+        char buf[256];
+        if (s->is_recording) {
+            snprintf(buf, sizeof(buf), "REC | FPS: %.1f | Frames: %lld", 
+                     s->current_fps, s->frames_recorded);
+            if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
+        } else {
+             if (s->last_run_frames_recorded > 0) {
+                // Approximate duration based on FPS (or timestamp diff if we kept it)
+                double duration_sec = 0.0;
+                if (s->src_fps > 0.1) duration_sec = (double)s->last_run_frames_recorded / s->src_fps;
 
-    data->grid = gtk_grid_new(); 
-    gtk_grid_set_column_homogeneous(GTK_GRID(data->grid), TRUE); 
-    gtk_grid_set_row_homogeneous(GTK_GRID(data->grid), FALSE); // Allow rows to shrink to content
-    gtk_grid_set_row_spacing(GTK_GRID(data->grid), BOX_SPACING_PX); 
-    gtk_grid_set_column_spacing(GTK_GRID(data->grid), BOX_SPACING_PX);
-    gtk_box_pack_start(GTK_BOX(f1a_vbox), data->grid, TRUE, TRUE, 0);
-
-    for (size_t i=0; i<data->streams.size(); ++i) {
-        VideoStream* s = data->streams[i];
-        GtkWidget* stream_frame = gtk_frame_new(NULL);
-        gtk_container_set_border_width(GTK_CONTAINER(stream_frame), FRAME_PADDING_PX);
-        GtkWidget* stream_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, WIDGET_SPACING_PX);
-        gtk_container_add(GTK_CONTAINER(stream_frame), stream_vbox);
-
-        GtkWidget* label_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX);
-        gtk_box_pack_start(GTK_BOX(stream_vbox), label_hbox, FALSE, FALSE, 0);
-
-        GtkWidget* name_label = gtk_label_new(NULL);
-        gchar* markup = g_markup_printf_escaped("<b>%s</b>", s->name.c_str());
-        gtk_label_set_markup(GTK_LABEL(name_label), markup); g_free(markup);
-        gtk_label_set_xalign(GTK_LABEL(name_label), 0.0);
-        gtk_widget_set_margin_start(name_label, WIDGET_MARGIN_PX);
-        gtk_widget_set_margin_end(name_label, WIDGET_MARGIN_PX);
-        gtk_box_pack_start(GTK_BOX(label_hbox), name_label, TRUE, TRUE, 0);
-
-        s->record_checkbox = gtk_check_button_new_with_label("Record");
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->record_checkbox), s->record_enabled);
-        gtk_widget_set_margin_start(s->record_checkbox, WIDGET_MARGIN_PX);
-        gtk_widget_set_margin_end(s->record_checkbox, WIDGET_MARGIN_PX);
-        gtk_box_pack_start(GTK_BOX(label_hbox), s->record_checkbox, FALSE, FALSE, 0);
-
-        GtkWidget* aspect_frame = gtk_aspect_frame_new(NULL, 0.5, 0.5, 4.0/3.0, FALSE);
-        gtk_frame_set_shadow_type(GTK_FRAME(aspect_frame), GTK_SHADOW_NONE);
-        gtk_widget_set_hexpand(aspect_frame, TRUE);
-        gtk_widget_set_vexpand(aspect_frame, TRUE);
-        gtk_container_add(GTK_CONTAINER(aspect_frame), s->preview_widget);
-        gtk_box_pack_start(GTK_BOX(stream_vbox), aspect_frame, TRUE, TRUE, 0);
-
-        s->stats_label = gtk_label_new("Ready");
-        gtk_label_set_xalign(GTK_LABEL(s->stats_label), 0.0);
-        gtk_widget_set_margin_start(s->stats_label, WIDGET_MARGIN_PX);
-        gtk_widget_set_margin_end(s->stats_label, WIDGET_MARGIN_PX);
-        gtk_box_pack_start(GTK_BOX(stream_vbox), s->stats_label, FALSE, FALSE, 2);
-
-        gtk_grid_attach(GTK_GRID(data->grid), stream_frame, (int)(i%2), (int)(i/2), 1, 1);
+                snprintf(buf, sizeof(buf), "Last: %s (%lld f, %.1fs) | Src: %.1f", 
+                         s->last_run_stage_name.c_str(), s->last_run_frames_recorded, duration_sec, s->src_fps);
+             } else {
+                snprintf(buf, sizeof(buf), "%dx%d | Src: %.1f | Ready", s->width, s->height, s->src_fps);
+             }
+             // Ensure overlay is clear
+             if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
+        }
+        gtk_label_set_text(GTK_LABEL(s->stats_label), buf);
     }
 
-    data->record_button = gtk_button_new_with_label("Start Recording");
-    g_signal_connect(data->record_button, "clicked", G_CALLBACK(+[](GtkButton* b, gpointer d){ toggle_recording((AppData*)d); }), data);
-    gtk_box_pack_start(GTK_BOX(f2_hbox), data->record_button, TRUE, TRUE, 0);
+    char bag_buf[256];
+    std::lock_guard<std::mutex> lock(m_data->data_mutex);
+    snprintf(bag_buf, sizeof(bag_buf), "Topics: %d/%lu\nMessages: %lld", 
+             m_data->bag_topics_found, m_data->ros_topics.size(), m_data->bag_messages_recorded);
+    m_bag_stats_label.set_text(bag_buf);
 
-    GtkWidget *quit_btn = gtk_button_new_with_label("Quit");
-    g_signal_connect(quit_btn, "clicked", G_CALLBACK(+[](GtkButton* b, gpointer d){ gtk_window_close(GTK_WINDOW(((AppData*)d)->window)); }), data);
-    gtk_box_pack_end(GTK_BOX(f2_hbox), quit_btn, FALSE, FALSE, 0);
-}
-
-void start_ui_update_loop(AppData* data) {
-    g_timeout_add(500, (GSourceFunc)+[](gpointer d) -> gboolean {
-        AppData* ad = (AppData*)d;
-        if (ad->is_quitting) return G_SOURCE_REMOVE;
-        ad->blink_state = !ad->blink_state;
-        for (auto s : ad->streams) {
-            if (s->rec_text) {
-                if (ad->global_recording && s->is_recording && ad->blink_state) g_object_set(s->rec_text, "text", "REC", NULL);
-                else g_object_set(s->rec_text, "text", "", NULL);
-            }
-            if (s->stats_label && GTK_IS_LABEL(s->stats_label)) {
-                if (ad->global_recording && s->is_recording) {
-                    char buf[128];
-                    snprintf(buf, sizeof(buf), "%dx%d | Src: %.1f | Rec: %.1f | Drop: %lld", 
-                             s->width, s->height, s->src_fps, s->current_fps, s->frames_dropped);
-                    gtk_label_set_text(GTK_LABEL(s->stats_label), buf);
-                } else if (!ad->global_recording) {
-                    char buf[512];
-                    if (!s->last_run_stage_name.empty()) {
-                        snprintf(buf, sizeof(buf), "%dx%d | Src: %.1f | Last: %s (%lld frames)", 
-                                 s->width, s->height, s->src_fps, s->last_run_stage_name.c_str(), s->last_run_frames_recorded);
-                    } else {
-                        snprintf(buf, sizeof(buf), "%dx%d | Src: %.1f | Ready", s->width, s->height, s->src_fps);
-                    }
-                    gtk_label_set_text(GTK_LABEL(s->stats_label), buf);
-                }
-            }
-        }
-        
-        // Update Bag Stats
-        if (ad->bag_stats_label && GTK_IS_LABEL(ad->bag_stats_label)) {
-            char buf[256];
-            std::lock_guard<std::mutex> lock(ad->data_mutex);
-            snprintf(buf, sizeof(buf), "Topics: %d/%lu\nMessages: %lld", 
-                     ad->bag_topics_found, ad->ros_topics.size(), ad->bag_messages_recorded);
-            gtk_label_set_text(GTK_LABEL(ad->bag_stats_label), buf);
-        }
-
-        return G_SOURCE_CONTINUE;
-    }, data);
+    return true; 
 }
