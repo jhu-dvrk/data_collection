@@ -62,6 +62,7 @@ struct AppData {
     int session_stage_cycle_count;
     int current_stage_idx; // Track the current stage index for UI highlighting
     bool global_recording, blink_state, session_initialized, audio_is_recording, is_quitting;
+    bool enable_audio; 
     int eos_received_count;
 
     // ROS 2 members
@@ -76,7 +77,7 @@ struct AppData {
                 audio_src_combo(NULL), stages_combo(NULL), session_entry(NULL), grid(NULL),
                 data_directory("."), session_stage_cycle_count(1), current_stage_idx(0), global_recording(false), 
                 blink_state(false), session_initialized(false), audio_is_recording(false), 
-                is_quitting(false), eos_received_count(0) {}
+                is_quitting(false), enable_audio(false), eos_received_count(0) {}
 };
 
 #endif // CONTEXT_HPP

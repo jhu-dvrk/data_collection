@@ -309,7 +309,7 @@ void create_main_window(AppData* data) {
     gtk_box_pack_start(GTK_BOX(audio_header_hbox), audio_label, TRUE, TRUE, 0);
 
     data->audio_enable_checkbox = gtk_check_button_new_with_label("Record");
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(data->audio_enable_checkbox), TRUE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(data->audio_enable_checkbox), data->enable_audio);
     gtk_box_pack_start(GTK_BOX(audio_header_hbox), data->audio_enable_checkbox, FALSE, FALSE, 0);
 
     GtkWidget *audio_ctrl_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);

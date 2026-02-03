@@ -81,6 +81,7 @@ int main(int argc, char *argv[]) {
 
     for (const auto& root : config_roots) {
         data.data_directory = root.get("data_directory", data.data_directory).asString();
+        data.enable_audio = data.enable_audio || root.get("enable_audio", false).asBool();
         if (root.isMember("stages")) {
             for (const auto& s : root["stages"]) data.config_stages.push_back(s.asString());
         }

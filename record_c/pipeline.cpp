@@ -143,7 +143,8 @@ gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data) {
             
             // Map -100dB..0dB to 0.0..1.0
             double lvl = (display_val + 100.0) / 100.0;
-            if (lvl < 0) lvl = 0; if (lvl > 1) lvl = 1;
+            if (lvl < 0) lvl = 0;
+            if (lvl > 1) lvl = 1;
             
             if (ad->audio_level_bar && GTK_IS_LEVEL_BAR(ad->audio_level_bar)) {
                 gtk_level_bar_set_value(GTK_LEVEL_BAR(ad->audio_level_bar), lvl);
