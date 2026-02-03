@@ -23,7 +23,13 @@ pkg_check_modules(GTK REQUIRED gtk+-3.0)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
 # C++ Executable: record_c
-add_executable(record_c record_c/main.cpp)
+add_executable(record_c 
+  record_c/main.cpp
+  record_c/context.cpp
+  record_c/pipeline.cpp
+  record_c/ui.cpp
+  record_c/ros_node.cpp
+)
 ament_target_dependencies(record_c
   rclcpp
   std_msgs
