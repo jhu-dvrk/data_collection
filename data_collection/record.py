@@ -79,7 +79,7 @@ class VideoThread(QThread):
         
         # UI state
         self.preview_enabled = True
-        self.time_watermark = video_config.get('time_watermark', False)
+        self.timestamp_overlay = video_config.get('timestamp_overlay', False)
         self._restart_cap = False
         
         # Stream info
@@ -133,7 +133,7 @@ class VideoThread(QThread):
         # Overlay Pipeline: Add black strip and timestamps
         # videobox: adds 30px height to bottom (negative value adds border)
         overlay_str = ""
-        if self.time_watermark:
+        if self.timestamp_overlay:
             # Set datetime-epoch based on current local time with timezone info
             now = datetime.datetime.now().astimezone()
             now_iso = now.isoformat(timespec='milliseconds')

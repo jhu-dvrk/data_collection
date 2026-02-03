@@ -75,7 +75,7 @@ Define your video sources in a JSON file. The configuration format is defined in
       "name": "camera_1",
       "stream": "v4l2src device=/dev/video0 ! video/x-raw,width=640,height=480,framerate=30/1",
       "record": true,
-      "time_watermark": true,
+      "timestamp_overlay": true,
       "encoding": {
         "width": 320,
         "height": 240,
@@ -86,7 +86,7 @@ Define your video sources in a JSON file. The configuration format is defined in
       "name": "test_pattern",
       "stream": "videotestsrc pattern=smpte75",
       "record": false,
-      "time_watermark": false
+      "timestamp_overlay": false
     }
   ]
 }
@@ -166,7 +166,7 @@ ros2 run data_collection extract -d 20260117_153206 -l
 
 ### 5. Synchronization Verification
 
-The `check_timestamps.py` script verifies the synchronization between the recording's filenames (based on system time) and the burned-in GStreamer timestamps. It uses Tesseract OCR to read the "Time watermark" strip.
+The `check_timestamps.py` script verifies the synchronization between the recording's filenames (based on system time) and the burned-in GStreamer timestamps. It uses Tesseract OCR to read the "Timestamp overlay" strip.
 
 ```bash
 ros2 run data_collection check_timestamps -d 20260117_153206/extracted
@@ -192,7 +192,7 @@ python3 -m data_collection.video_tag -v video.mp4 -c config.json
 - **Graceful Exit**: Support for `Ctrl+C` and "Q" key with prompts to save unsaved changes.
 
 **Key Features (check_timestamps)**:
-- **Automatic ROI**: Specifically targets the bottom 30px black watermark strip for speed and accuracy.
+- **Automatic ROI**: Specifically targets the bottom 30px black timestamp overlay strip for speed and accuracy.
 - **Latency Analysis**: Calculates the average difference between system capture time and the video's internal clock.
 - **Jitter Measurement**: Calculates the standard deviation of latency across all frames.
 - **Transition Detection**: Identifies frame boundaries where the integer second changes to estimate sub-second precision.

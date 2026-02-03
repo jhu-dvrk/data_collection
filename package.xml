@@ -8,10 +8,24 @@
   <license>MIT</license>
 
   <depend>rclpy</depend>
+  <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+  <build_depend>ament_cmake</build_depend>
+  <build_depend>ament_cmake_python</build_depend>
+  <build_depend>pkg-config</build_depend>
+  <build_depend>gstreamer-1.0</build_depend>
+  <build_depend>gstreamer-video-1.0</build_depend>
+  <build_depend>gstreamer-app-1.0</build_depend>
+  <build_depend>gtk+-3.0</build_depend>
+  <build_depend>jsoncpp</build_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>gstreamer-1.0</exec_depend>
+  <exec_depend>gstreamer-video-1.0</exec_depend>
+  <exec_depend>gstreamer-app-1.0</exec_depend>
+  <exec_depend>gtk+-3.0</exec_depend>
+  <exec_depend>jsoncpp</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
@@ -19,6 +33,6 @@
   <test_depend>python3-pytest</test_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>
