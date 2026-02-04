@@ -24,6 +24,21 @@ pkg_check_modules(GTK REQUIRED gtk+-3.0)
 pkg_check_modules(GTKMM REQUIRED gtkmm-3.0)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
+# Common Library: data_collection
+add_library(data_collection_lib
+  common/config.cpp
+)
+target_include_directories(data_collection_lib PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/common>
+  $<INSTALL_INTERFACE:include>
+  ${JSONCPP_INCLUDE_DIRS}
+)
+target_link_libraries(data_collection_lib
+  ${JSONCPP_LIBRARIES}
+)
+# Alias for easier usage if needed, though target name is fine
+set_target_properties(data_collection_lib PROPERTIES OUTPUT_NAME "data_collection")
+
 # C++ Executable: record_c
 add_executable(record_c 
   record_c/main.cpp
@@ -49,6 +64,7 @@ target_link_libraries(record_c
   ${GTK_LIBRARIES}
   ${GTKMM_LIBRARIES}
   ${JSONCPP_LIBRARIES}
+  data_collection_lib
 )
 
 
@@ -74,6 +90,7 @@ target_link_libraries(tag_c
   ${GTKMM_LIBRARIES}
   ${JSONCPP_LIBRARIES}
   gstvideo-1.0
+  data_collection_lib
 )
 
 # Install C++ executable tag_c
@@ -97,6 +114,7 @@ target_link_libraries(latency_c
   ${GTKMM_LIBRARIES}
   ${JSONCPP_LIBRARIES}
   gstvideo-1.0
+  data_collection_lib
 )
 install(TARGETS latency_c
   DESTINATION lib/${PROJECT_NAME}

@@ -16,6 +16,7 @@
 #include "pipeline.hpp"
 #include "ui.hpp"
 #include "ros_node.hpp"
+#include "config.hpp"
 
 
 // Signal handler for Ctrl+C
@@ -93,38 +94,30 @@ int main(int argc, char *argv[]) {
     });
     ros_thread.detach();
 
-    std::vector<Json::Value> config_roots;
+    std::vector<Json::Value> config_roots; // Keeping this for now if needed, but preferably use AppConfig objects
+    std::vector<dc::AppConfig> app_configs;
+
     for (const auto& path : configs) {
-        std::ifstream f(path);
-        if (!f.is_open()) {
-            std::cerr << "Error: Could not open config file: " << path << std::endl;
-            return 1;
-        }
         Json::Value root;
-        Json::CharReaderBuilder builder;
-        std::string errs;
-        if (!Json::parseFromStream(builder, f, &root, &errs)) {
-            std::cerr << "Error: Could not parse JSON in file: " << path << "\n" << errs << std::endl;
+        if (dc::Config::load_from_file(path, root)) {
+            config_roots.push_back(root);
+            app_configs.push_back(dc::Config::parse_app_config(root));
+        } else {
+             // Error already printed by load_from_file
             return 1;
         }
-        config_roots.push_back(root);
     }
 
-    for (const auto& root : config_roots) {
-        data.data_directory = root.get("data_directory", data.data_directory).asString();
-        data.enable_audio = data.enable_audio || root.get("enable_audio", false).asBool();
-        if (root.isMember("stages")) {
+    for (const auto& cfg : app_configs) {
+        if (!cfg.data_directory.empty() && cfg.data_directory != ".") data.data_directory = cfg.data_directory;
+        data.enable_audio = data.enable_audio || cfg.enable_audio;
+        
+        if (!cfg.stages.empty()) {
             data.explicit_stages = true;
-            for (const auto& s : root["stages"]) data.config_stages.push_back(s.asString());
+            data.config_stages.insert(data.config_stages.end(), cfg.stages.begin(), cfg.stages.end());
         }
-        if (root.isMember("tags")) {
-            for (const auto& t : root["tags"]) data.config_tags.push_back(t.asString());
-        }
-        if (root.isMember("ros_topics")) {
-            for (const auto& t : root["ros_topics"]) {
-                data.ros_topics.push_back(t.asString());
-            }
-        }
+        data.config_tags.insert(data.config_tags.end(), cfg.tags.begin(), cfg.tags.end());
+        data.ros_topics.insert(data.ros_topics.end(), cfg.ros_topics.begin(), cfg.ros_topics.end());
     }
     if (data.config_stages.empty()) data.config_stages.push_back("stage");
 
@@ -140,8 +133,8 @@ int main(int argc, char *argv[]) {
         open_bag_writer(&data, data.session_bag_path);
     }
 
-    for (const auto& root : config_roots) {
-        for (const auto& v : root["videos"]) {
+    for (const auto& cfg : app_configs) {
+        for (const auto& v : cfg.videos) {
             VideoStream* s = create_video_stream(&data, v);
             if (s) data.streams.push_back(s);
         }

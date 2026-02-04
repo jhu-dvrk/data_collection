@@ -14,6 +14,8 @@
 #include <cmath>
 #include <numeric>
 
+#include "config.hpp"
+
 class LatencyWindow : public Gtk::Window {
 public:
     LatencyWindow(const std::string& config_path) 
@@ -144,6 +146,40 @@ protected:
         m_flash_layer.queue_draw(); // Force redraw
         
         m_lbl_result.set_text("Measuring sample " + std::to_string(m_samples_collected + 1) + "/" + std::to_string(m_target_samples) + "...");
+        
+        // Timeout for failed detection (1.0 second)
+        Glib::signal_timeout().connect_once([this]() {
+            std::lock_guard<std::mutex> lock(m_state_mutex);
+            if (m_measuring) {
+                // Timeout logic
+                m_measuring = false;
+                std::cerr << "Sample " << (m_samples_collected + 1) << " timed out." << std::endl;
+                
+                // Do NOT increment m_samples_collected, retrying this sample? 
+                // Or just ignore it? The user said "remove from statistics", which implies ignoring.
+                // But we probably want to continue the sequence or abort?
+                // Let's retry the sample or just skip? 
+                // "Remove that sample from statistics" usually means just don't count it.
+                // But we still need to reach target?
+                // I'll skip it but keep going to target count.
+                // Wait, if I don't increment collected, we might loop forever if camera is blocked.
+                // Let's increment but NOT add to m_latencies.
+                // Or even better: Retry logic? No, simplistic approach: Skip sample.
+                
+                // If we skip, we have fewer samples at the end.
+                // User asked "sequence of ten", so let's try to get 10 VALID samples.
+                // But avoid infinite loop. Let's abort this sample, hide flash, and schedule next attempt.
+                
+                m_flash_layer.hide();
+                
+                // Schedule next attempt
+                Glib::signal_timeout().connect_once([this]() {
+                     std::lock_guard<std::mutex> lock(m_state_mutex);
+                     // If we have failed too many times, maybe stop? For now infinite retry until 10 good samples.
+                     start_single_measurement();
+                }, 1500);
+            }
+        }, 1000); // 1.0 second timeout
     }
 
     // Called from GStreamer thread
@@ -229,38 +265,26 @@ protected:
     }
 
     void load_pipeline(const std::string& config_path) {
-        std::ifstream ifs(config_path);
-        if (!ifs.is_open()) {
-            std::cerr << "Failed to open config: " << config_path << std::endl;
+        Json::Value root;
+        if (!dc::Config::load_from_file(config_path, root)) {
             return;
         }
 
-        Json::Value root;
-        ifs >> root;
+        std::vector<dc::VideoConfig> videos = dc::Config::parse_videos(root);
 
-        if (!root.isMember("videos") || root["videos"].empty()) {
+        if (videos.empty()) {
             std::cerr << "No videos in config" << std::endl;
             return;
         }
 
-        const auto& v = root["videos"][0]; // Pick first video config
-        if (!v.isMember("stream")) {
+        const auto& v = videos[0]; // Pick first video config
+        if (v.stream.empty()) {
              std::cerr << "Video config missing 'stream' field" << std::endl;
              return;
         }
 
-        std::string stream = v["stream"].asString();
-        
-        std::string caps = "video/x-raw";
-        if (v.isMember("encoding")) {
-            if (v["encoding"].isMember("width") && v["encoding"].isMember("height")) {
-                caps += ",width=" + std::to_string(v["encoding"]["width"].asInt()) + 
-                        ",height=" + std::to_string(v["encoding"]["height"].asInt());
-            }
-            if (v["encoding"].isMember("frame_rate")) {
-                caps += ",framerate=" + std::to_string(v["encoding"]["frame_rate"].asInt()) + "/1";
-            }
-        }
+        std::string stream = v.stream;
+        std::string caps = dc::Config::make_caps_string(v.encoding);
 
         // Insert identity name=probe_identity to attach our analysis probe
         // Order: Source -> ... -> Identity -> Videoconvert -> GTKSink

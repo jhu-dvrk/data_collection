@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include "config.hpp"
 
 TagWindow::TagWindow(const std::string& video, const std::string& config, const std::string& tags_file, bool load_session_tags)
     : m_main_hbox(Gtk::ORIENTATION_HORIZONTAL, 10),
@@ -142,9 +143,11 @@ TagWindow::~TagWindow() {
 
 void TagWindow::load_config(const std::string& path) {
     if (path.empty()) return;
-    std::ifstream ifs(path);
+    
     Json::Value root;
-    ifs >> root;
+    if (!dc::Config::load_from_file(path, root)) return;
+    
+    dc::AppConfig cfg = dc::Config::parse_app_config(root);
 
     auto add_row = [this](const std::string& tag_name){
         auto* btn = Gtk::make_managed<Gtk::ToggleButton>(tag_name);
@@ -168,21 +171,15 @@ void TagWindow::load_config(const std::string& path) {
         m_grid_row_count++;
     };
 
-    if (root.isMember("stages")) {
-        for (auto& s : root["stages"]) {
-            std::string name = s.asString();
-            m_data.stages.push_back(name);
-            add_row(name + "_start");
-            add_row(name + "_end");
-        }
+    for (const auto& s : cfg.stages) {
+        m_data.stages.push_back(s);
+        add_row(s + "_start");
+        add_row(s + "_end");
     }
 
-    if (root.isMember("tags")) {
-        for (auto& t : root["tags"]) {
-            std::string name = t.asString();
-            m_data.tags.push_back(name);
-            add_row(name);
-        }
+    for (const auto& t : cfg.tags) {
+        m_data.tags.push_back(t);
+        add_row(t);
     }
     m_tags_grid.show_all();
 }

@@ -23,10 +23,10 @@ void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, gu
     }
 }
 
-std::string get_best_encoder(const Json::Value& enc_cfg) {
-    int br = enc_cfg.get("bitrate", 10000).asInt();
-    int preset = enc_cfg.get("speed_preset", 5).asInt();
-    int keyint = enc_cfg.get("key_int_max", 30).asInt();
+std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
+    int br = enc_cfg.bitrate;
+    int preset = enc_cfg.speed_preset;
+    int keyint = enc_cfg.key_int_max;
 
     const char* candidates[] = {"nvh264enc", "nvv4l2h264enc", "vaapih264enc", "x264enc"};
     for (const char* c : candidates) {
@@ -309,29 +309,29 @@ void create_audio_pipeline(AppData* data) {
     }
 }
 
-VideoStream* create_video_stream(AppData* data, const Json::Value& v) {
-    VideoStream *s = new VideoStream(); s->name = v["name"].asString();
-    s->record_enabled = v.get("record", true).asBool();
+VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
+    VideoStream *s = new VideoStream(); s->name = v.name;
+    s->record_enabled = v.record;
 
     std::string caps = "video/x-raw";
-    if (v["encoding"].isMember("width") && v["encoding"].isMember("height")) {
-        caps += ",width=" + std::to_string(v["encoding"]["width"].asInt()) + ",height=" + std::to_string(v["encoding"]["height"].asInt());
+    if (v.encoding.width > 0 && v.encoding.height > 0) {
+        caps += ",width=" + std::to_string(v.encoding.width) + ",height=" + std::to_string(v.encoding.height);
     }
-    if (v["encoding"].isMember("frame_rate")) {
-        caps += ",framerate=" + std::to_string(v["encoding"]["frame_rate"].asInt()) + "/1";
+    if (v.encoding.frame_rate > 0) {
+        caps += ",framerate=" + std::to_string(v.encoding.frame_rate) + "/1";
     }
 
     std::string ts_overlay = "";
-    if (v.get("timestamp_overlay", false).asBool()) {
+    if (v.timestamp_overlay) {
         ts_overlay = " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" shaded-background=true shading-value=255 xpad=0 ypad=0 "
                      " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true shading-value=255 xpad=0 ypad=0 ";
     }
 
-    std::string pstr = v["stream"].asString() + " do-timestamp=true ! " + caps + ts_overlay + " ! tee name=t "
+    std::string pstr = v.stream + " do-timestamp=true ! " + caps + ts_overlay + " ! tee name=t "
         "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=rec_overlay ! gtksink name=sink sync=false async=false ";
     
     if (s->record_enabled) {
-        pstr += "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v["encoding"]) + " ! queue max-size-buffers=1 leaky=downstream ! mp4mux ! filesink name=muxer sync=false async=false";
+        pstr += "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v.encoding) + " ! queue max-size-buffers=1 leaky=downstream ! mp4mux ! filesink name=muxer sync=false async=false";
     }
 
     s->pipeline_desc = pstr;
