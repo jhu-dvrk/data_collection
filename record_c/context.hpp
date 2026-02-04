@@ -10,17 +10,13 @@
 #include <gtk/gtk.h>
 #include <gst/gst.h>
 
-#ifndef DISABLE_ROS
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
-#endif
 
 extern int app_max_threads;
 
 // Forward declarations to reduce compilation time
-#ifndef DISABLE_ROS
 namespace rosbag2_cpp { class Writer; }
-#endif
 
 struct FrameData {
     long long cpu_ts;
@@ -100,7 +96,6 @@ struct AppData {
     bool enable_audio; 
     int eos_received_count;
 
-#ifndef DISABLE_ROS
     // ROS 2 members
     std::string trigger_topic;
     std::shared_ptr<rclcpp::Node> node;
@@ -117,7 +112,6 @@ struct AppData {
     // Bag Stats
     long long bag_messages_recorded;
     int bag_topics_found;
-#endif
     GtkWidget *bag_stats_label;
 
     bool explicit_stages;

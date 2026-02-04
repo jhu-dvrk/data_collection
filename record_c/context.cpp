@@ -1,10 +1,8 @@
 #include "context.hpp"
 
-#ifndef DISABLE_ROS
 #include <rclcpp/rclcpp.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <std_msgs/msg/bool.hpp>
-#endif
 
 int app_max_threads = 1;
 
@@ -15,9 +13,7 @@ AppData::AppData() : audio_pipeline(NULL), audio_sink(NULL), audio_valve(NULL), 
             data_directory("."), session_stage_cycle_count(1), current_stage_idx(0), global_recording(false), 
             blink_state(false), session_initialized(false), audio_is_recording(false), 
             is_quitting(false), enable_audio(false), eos_received_count(0),
-#ifndef DISABLE_ROS
             bag_messages_recorded(0), bag_topics_found(0), 
-#endif
             bag_stats_label(NULL),
             explicit_stages(false),
             audio_total_offset_ns(0), audio_last_raw_pts(-1), audio_last_duration(0) {}

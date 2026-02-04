@@ -83,12 +83,8 @@ install(TARGETS tag_c
 
 # C++ Executable: latency_c
 add_executable(latency_c
-  record_c/latency_main.cpp
-  record_c/latency_ui.cpp
-  record_c/pipeline.cpp
-  record_c/context.cpp
+  latency_c/main.cpp
 )
-target_compile_definitions(latency_c PRIVATE DISABLE_ROS)
 target_include_directories(latency_c PRIVATE
   ${GST_INCLUDE_DIRS}
   ${GTK_INCLUDE_DIRS}
