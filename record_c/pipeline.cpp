@@ -1,3 +1,4 @@
+
 #include "pipeline.hpp"
 #include <iostream>
 #include <gtk/gtk.h>
@@ -6,6 +7,13 @@
 void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, guint64 duration, gpointer user_data) {
     (void)overlay; (void)timestamp; (void)duration;
     VideoStream *s = (VideoStream *)user_data;
+
+    if (s->is_recording && s->frames_recorded < 0) { // Special flag for black flash
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_paint(cr);
+        return;
+    }
+
     if (s->is_recording) {
         cairo_set_source_rgb(cr, 1.0, 0.0, 0.0); // Red
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
@@ -26,6 +34,7 @@ std::string get_best_encoder(const Json::Value& enc_cfg) {
         if (f) {
             gst_object_unref(f);
             std::string name(c);
+            std::cout << "Selected H264 Encoder: " << name << std::endl;
             if (name == "nvh264enc") return "nvh264enc bitrate=" + std::to_string(br * 1000) + " zerolatency=true ! h264parse";
             if (name == "nvv4l2h264enc") return "nvv4l2h264enc bitrate=" + std::to_string(br * 1000) + " preset-level=4 control-rate=1 ! h264parse";
             if (name == "vaapih264enc") return "vaapih264enc bitrate=" + std::to_string(br) + " ! h264parse";
@@ -94,11 +103,52 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
     AppData *ad = (AppData *)user_data;
     if (ad->audio_is_recording && (info->type & GST_PAD_PROBE_TYPE_BUFFER)) {
         GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+        if (!gst_buffer_is_writable(buf)) {
+             // We need to modify timestamps, so we need a writable buffer.
+             // gst_buffer_make_writable() might copy data if shared implicitly.
+             // Since this is audio, copying is cheap.
+             buf = gst_buffer_make_writable(buf);
+             GST_PAD_PROBE_INFO_DATA(info) = buf;
+        }
+
         long long pts = (long long)GST_BUFFER_PTS(buf);
-        if (!GST_CLOCK_TIME_IS_VALID(pts)) pts = -1;
-        long long base_time = 0;
-        if (ad->audio_pipeline) base_time = (long long)gst_element_get_base_time(ad->audio_pipeline);
-        ad->audio_frames.push_back({g_get_real_time() * 1000, pts + base_time});
+        if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
+        long long duration = (long long)GST_BUFFER_DURATION(buf);
+        
+        // Gapless stitching logic
+        if (ad->audio_last_raw_pts != -1) {
+            long long delta = pts - ad->audio_last_raw_pts;
+            // Use 500ms threshold for pause detection
+            if (delta > 500 * 1000000LL) {
+                 long long expected_gap = ad->audio_last_duration;
+                 if (!GST_CLOCK_TIME_IS_VALID(expected_gap) || expected_gap == 0) expected_gap = 20 * 1000000LL; // Default 20ms?
+                 
+                 long long gap = delta - expected_gap;
+                 if (gap > 0) ad->audio_total_offset_ns += gap;
+            }
+        }
+        ad->audio_last_raw_pts = pts;
+        ad->audio_last_duration = duration;
+
+        // Apply offset to buffer
+        GST_BUFFER_PTS(buf) = pts - ad->audio_total_offset_ns;
+        if (GST_CLOCK_TIME_IS_VALID(GST_BUFFER_DTS(buf))) {
+             GST_BUFFER_DTS(buf) = GST_BUFFER_DTS(buf) - ad->audio_total_offset_ns;
+        }
+
+        // long long base_time = 0; // Relative to 0 now
+        // if (ad->audio_pipeline) base_time = (long long)gst_element_get_base_time(ad->audio_pipeline);
+        // Note: GST_TS in sidecar should be the timestamp inside the file (relative to start 0).
+        // Since we are rewriting buffer timestamps to be continuous from 0 (implicitly if first pts ~ offset), 
+        // we use the modified PTS.
+        
+        long long gst_ts = GST_BUFFER_PTS(buf);
+
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+        ad->audio_frames.push_back({cpu_ts, gst_ts});
     }
     return GST_PAD_PROBE_OK;
 }
@@ -108,11 +158,49 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
     VideoStream *s = (VideoStream *)user_data;
     if (s->is_recording && (info->type & GST_PAD_PROBE_TYPE_BUFFER)) {
         GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+        
+        // Ensure writable for timestamp modification
+        if (!gst_buffer_is_writable(buf)) {
+             // For video, deep copy is expensive. Use copy to share memory but new metadata.
+             // gst_buffer_copy() with default flags performs shallow copy of memory (ref)
+             GstBuffer *new_buf = gst_buffer_copy(buf);
+             gst_buffer_unref(buf);
+             buf = new_buf;
+             GST_PAD_PROBE_INFO_DATA(info) = buf;
+        }
+
         long long pts = (long long)GST_BUFFER_PTS(buf);
-        if (!GST_CLOCK_TIME_IS_VALID(pts)) pts = -1;
-        long long base_time = 0;
-        if (s->pipeline) base_time = (long long)gst_element_get_base_time(s->pipeline);
-        s->frames.push_back({g_get_real_time() * 1000, pts + base_time});
+        if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
+        long long duration = (long long)GST_BUFFER_DURATION(buf);
+
+        // Gapless stitching logic
+        if (s->last_raw_pts != -1) {
+            long long delta = pts - s->last_raw_pts;
+            // Use 500ms threshold for pause detection
+            if (delta > 500 * 1000000LL) {
+                 long long expected_gap = s->last_duration;
+                 if (!GST_CLOCK_TIME_IS_VALID(expected_gap) || expected_gap == 0) expected_gap = 33333333LL; // Default 30fps
+                 
+                 long long gap = delta - expected_gap;
+                 if (gap > 0) s->total_offset_ns += gap;
+            }
+        }
+        s->last_raw_pts = pts;
+        s->last_duration = duration;
+
+        // Apply offset
+        GST_BUFFER_PTS(buf) = pts - s->total_offset_ns;
+        if (GST_CLOCK_TIME_IS_VALID(GST_BUFFER_DTS(buf))) {
+             GST_BUFFER_DTS(buf) = GST_BUFFER_DTS(buf) - s->total_offset_ns;
+        }
+        
+        long long gst_ts = GST_BUFFER_PTS(buf);
+        
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+        s->frames.push_back({cpu_ts, gst_ts});
         s->frames_recorded++;
         
         long long now = g_get_monotonic_time();
@@ -235,13 +323,17 @@ VideoStream* create_video_stream(AppData* data, const Json::Value& v) {
 
     std::string ts_overlay = "";
     if (v.get("timestamp_overlay", false).asBool()) {
-        ts_overlay = " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" shaded-background=true "
-                     " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true ";
+        ts_overlay = " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" shaded-background=true shading-value=255 xpad=0 ypad=0 "
+                     " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true shading-value=255 xpad=0 ypad=0 ";
     }
 
     std::string pstr = v["stream"].asString() + " do-timestamp=true ! " + caps + ts_overlay + " ! tee name=t "
-        "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=rec_overlay ! gtksink name=sink sync=false async=false "
-        "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v["encoding"]) + " ! queue max-size-buffers=1 leaky=downstream ! mp4mux ! filesink name=muxer sync=false async=false";
+        "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=rec_overlay ! gtksink name=sink sync=false async=false ";
+    
+    if (s->record_enabled) {
+        pstr += "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v["encoding"]) + " ! queue max-size-buffers=1 leaky=downstream ! mp4mux ! filesink name=muxer sync=false async=false";
+    }
+
     s->pipeline_desc = pstr;
     s->pipeline = gst_parse_launch(pstr.c_str(), NULL);
     if (!s->pipeline) { delete s; return NULL; }

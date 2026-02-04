@@ -22,8 +22,7 @@
 static gboolean on_sigint(gpointer user_data) {
     AppData *data = static_cast<AppData*>(user_data);
     data->is_quitting = true;
-    gtk_main_quit(); 
-    // Gtk::Main::quit(); // Could use this too
+    Gtk::Main::quit();
     return FALSE;
 }
 
@@ -47,14 +46,29 @@ int main(int argc, char *argv[]) {
     for (int i=1; i<argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-c" && i+1 < argc) {
-            configs.push_back(argv[++i]);
+            std::string path = argv[++i];
+            char *abs_path = realpath(path.c_str(), NULL);
+            if (abs_path) {
+                data.config_files.push_back(abs_path);
+                free(abs_path);
+            } else {
+                data.config_files.push_back(path);
+            }
+            configs.push_back(data.config_files.back());
         } else if (arg == "-j" && i+1 < argc) {
             app_max_threads = std::stoi(argv[++i]);
             if (app_max_threads < 1) app_max_threads = 1;
         } else if (arg == "-p" && i+1 < argc) {
             data.trigger_topic = argv[++i];
         } else if (arg[0] != '-') {
-            configs.push_back(argv[i]);
+            char *abs_path = realpath(argv[i], NULL);
+            if (abs_path) {
+                data.config_files.push_back(abs_path);
+                free(abs_path);
+            } else {
+                data.config_files.push_back(argv[i]);
+            }
+            configs.push_back(data.config_files.back());
         }
     }
     if (configs.empty()) {
@@ -102,6 +116,9 @@ int main(int argc, char *argv[]) {
         if (root.isMember("stages")) {
             data.explicit_stages = true;
             for (const auto& s : root["stages"]) data.config_stages.push_back(s.asString());
+        }
+        if (root.isMember("tags")) {
+            for (const auto& t : root["tags"]) data.config_tags.push_back(t.asString());
         }
         if (root.isMember("ros_topics")) {
             for (const auto& t : root["ros_topics"]) {

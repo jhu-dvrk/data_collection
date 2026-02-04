@@ -57,6 +57,55 @@ install(TARGETS record_c
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# C++ Executable: tag_c
+add_executable(tag_c
+  record_c/tag_main.cpp
+  record_c/tag_ui.cpp
+)
+target_include_directories(tag_c PRIVATE
+  ${GST_INCLUDE_DIRS}
+  ${GTK_INCLUDE_DIRS}
+  ${GTKMM_INCLUDE_DIRS}
+  ${JSONCPP_INCLUDE_DIRS}
+)
+target_link_libraries(tag_c
+  ${GST_LIBRARIES}
+  ${GTK_LIBRARIES}
+  ${GTKMM_LIBRARIES}
+  ${JSONCPP_LIBRARIES}
+  gstvideo-1.0
+)
+
+# Install C++ executable tag_c
+install(TARGETS tag_c
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# C++ Executable: latency_c
+add_executable(latency_c
+  record_c/latency_main.cpp
+  record_c/latency_ui.cpp
+  record_c/pipeline.cpp
+  record_c/context.cpp
+)
+target_compile_definitions(latency_c PRIVATE DISABLE_ROS)
+target_include_directories(latency_c PRIVATE
+  ${GST_INCLUDE_DIRS}
+  ${GTK_INCLUDE_DIRS}
+  ${GTKMM_INCLUDE_DIRS}
+  ${JSONCPP_INCLUDE_DIRS}
+)
+target_link_libraries(latency_c
+  ${GST_LIBRARIES}
+  ${GTK_LIBRARIES}
+  ${GTKMM_LIBRARIES}
+  ${JSONCPP_LIBRARIES}
+  gstvideo-1.0
+)
+install(TARGETS latency_c
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Python Package
 ament_python_install_package(${PROJECT_NAME})
 

@@ -39,6 +39,8 @@ protected:
 
     AppData* m_data;
 
+    void on_tag_clicked(const std::string& tag_name);
+
     // Main Struct
     Gtk::Box m_main_vbox;
     Gtk::Box m_top_hbox;
@@ -55,6 +57,11 @@ protected:
     Gtk::ComboBoxText m_stages_combo;
     Gtk::Grid m_stages_grid;
     std::vector<Gtk::Label*> m_stage_labels; // Managed by container
+    
+    // Tags Frame
+    Gtk::Frame m_tags_frame;
+    Gtk::Box m_tags_vbox;
+    std::map<std::string, Gtk::Button*> m_tag_ui_buttons;
     
     // Audio Frame
     Gtk::Frame m_audio_frame;

@@ -27,6 +27,7 @@ MainWindow::MainWindow(AppData* data)
       m_top_hbox(Gtk::ORIENTATION_HORIZONTAL, BOX_SPACING_PX),
       m_session_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
       m_stages_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
+      m_tags_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
       m_audio_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
       m_audio_ctrl_hbox(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX),
       m_bag_vbox(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX),
@@ -151,13 +152,16 @@ MainWindow::MainWindow(AppData* data)
 
 
     // --- Stages Frame (Right Side) ---
+    Gtk::Box* right_side_vbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, BOX_SPACING_PX));
+    m_top_hbox.pack_start(*right_side_vbox, Gtk::PACK_SHRINK);
+
     if (m_data->explicit_stages) {
         Gtk::Label* stages_lbl = Gtk::manage(new Gtk::Label());
         stages_lbl->set_markup("<b>Stages</b>");
         m_stages_frame.set_label_widget(*stages_lbl);
         m_stages_frame.add(m_stages_vbox);
         m_stages_vbox.set_border_width(FRAME_PADDING_PX);
-        m_top_hbox.pack_start(m_stages_frame, Gtk::PACK_SHRINK); 
+        right_side_vbox->pack_start(m_stages_frame, Gtk::PACK_SHRINK); 
 
         for (size_t i = 0; i < m_data->config_stages.size(); ++i) {
             Gtk::EventBox* eb = Gtk::manage(new Gtk::EventBox());
@@ -181,6 +185,34 @@ MainWindow::MainWindow(AppData* data)
         update_stage_highlighting();
     }
 
+    // --- Tags Frame (Right Side) ---
+    Gtk::Label* tags_lbl = Gtk::manage(new Gtk::Label());
+    tags_lbl->set_markup("<b>Tags</b>");
+    m_tags_frame.set_label_widget(*tags_lbl);
+    m_tags_frame.add(m_tags_vbox);
+    m_tags_vbox.set_border_width(FRAME_PADDING_PX);
+    right_side_vbox->pack_start(m_tags_frame, Gtk::PACK_EXPAND_WIDGET);
+
+    // Get tags from config
+    std::vector<std::string> session_tags;
+    // We can assume tags are same for all videos, collect them once from AppData
+    // Actually they are in AppData::session_event_tags but we want the list of POSSIBLE tags
+    // Let's look at config_roots in main.cpp to see where they go.
+    // main.cpp currently doesn't store the tag NAMES list in AppData. 
+    // I should add them to AppData.
+
+    // Let's check context.hpp again.
+    // AppData has std::vector<std::string> config_stages;
+    // Let's add std::vector<std::string> config_tags; to AppData.
+
+    for (const auto& tag : m_data->config_tags) {
+        Gtk::Button* btn = Gtk::manage(new Gtk::Button(tag));
+        m_tag_ui_buttons[tag] = btn;
+        btn->signal_clicked().connect([this, tag]() {
+            this->on_tag_clicked(tag);
+        });
+        m_tags_vbox.pack_start(*btn, Gtk::PACK_SHRINK);
+    }
 
     // --- Bottom Controls ---
     m_main_vbox.pack_end(m_bottom_hbox, Gtk::PACK_SHRINK);
@@ -222,6 +254,10 @@ MainWindow::~MainWindow() {
         Json::Value root; root["name"] = "audio";
         root["audio_file"] = "audio_" + m_data->start_timestamp + ".wav";
         root["gstreamer_pipeline"] = m_data->audio_pipeline_desc;
+
+        Json::Value configFiles(Json::arrayValue);
+        for (const auto& f : m_data->config_files) configFiles.append(f);
+        root["config_files"] = configFiles;
         
         Json::Value framesArr(Json::arrayValue);
         for (const auto& f : m_data->audio_frames) {
@@ -241,6 +277,17 @@ MainWindow::~MainWindow() {
             Json::Value root; root["name"] = s->name;
             root["video_file"] = s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
             root["gstreamer_pipeline"] = s->pipeline_desc;
+
+            // Save session tags to a global file if we haven't already
+            // Actually, we should save it once in index.json or tags.json
+            
+            Json::Value configFiles(Json::arrayValue);
+            for (const auto& f : m_data->config_files) configFiles.append(f);
+            root["config_files"] = configFiles;
+
+            if (!m_data->session_event_tags.empty() || !m_data->session_stages.empty() || m_data->recording_start_cpu_ts > 0) {
+                root["session_tags_file"] = "tags.json";
+            }
             
             Json::Value framesArr(Json::arrayValue);
             for (const auto& f : s->frames) {
@@ -294,14 +341,9 @@ MainWindow::~MainWindow() {
         }
 
         indexRoot["videos"] = videosArr;
-        
+
         if (!m_data->session_bag_path.empty()) {
             std::string bag_name = m_data->session_bag_path.substr(m_data->session_bag_path.find_last_of("/\\\\") + 1);
-            // Check if directory actually contains the bag file with extension
-            // rosbag2_cpp usually creates folder or file depending on config. "mcap" creates a file if path ends in .mcap, 
-            // but we passed no extension, so it might create a directory OR append .mcap?
-            // Usually assuming <name>.mcap if mcap plugin used. 
-            // We'll write the name we asked for.
             indexRoot["rosbags"] = bag_name; 
         }
 
@@ -309,19 +351,48 @@ MainWindow::~MainWindow() {
         Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(indexRoot, &os);
     }
-    
+
     // Write tags.json
-    if (!m_data->session_event_tags.empty()) {
-         Json::Value tagsArr(Json::arrayValue);
-         for (const auto& tag : m_data->session_event_tags) {
-             Json::Value t;
-             t["tag"] = tag.first;
-             t["cpu_ts"] = (Json::Value::Int64)tag.second;
-             tagsArr.append(t);
-         }
-         std::ofstream os(m_data->session_dir + "/tags.json");
-         Json::StreamWriterBuilder b;
-         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsArr, &os);
+    if (!m_data->session_event_tags.empty() || !m_data->session_stages.empty() || m_data->recording_start_cpu_ts > 0) {
+        Json::Value tagsRoot;
+        Json::Value stagesArr(Json::arrayValue);
+        Json::Value tagsObj(Json::objectValue);
+
+        // Add already recorded stages
+        for (const auto& s : m_data->session_stages) {
+            Json::Value stageEntry;
+            stageEntry["name"] = s.name;
+            stageEntry["start"] = (Json::Value::Int64)s.start_ts;
+            stageEntry["end"] = (Json::Value::Int64)s.end_ts;
+            stagesArr.append(stageEntry);
+        }
+
+        // Add the current session stage if still active
+        if (m_data->recording_start_cpu_ts > 0) {
+             struct timespec ts;
+             clock_gettime(CLOCK_REALTIME, &ts);
+             long long end_cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+             std::string stage_name = m_data->config_stages.empty() ? "stage" : m_data->config_stages[m_data->current_stage_idx];
+
+             Json::Value stageEntry;
+             stageEntry["name"] = stage_name;
+             stageEntry["start"] = (Json::Value::Int64)m_data->recording_start_cpu_ts;
+             stageEntry["end"] = (Json::Value::Int64)end_cpu_ts;
+             stagesArr.append(stageEntry);
+        }
+
+        for (const auto& tag : m_data->session_event_tags) {
+            tagsObj[tag.first].append((Json::Value::Int64)tag.second);
+        }
+
+        tagsRoot["stages"] = stagesArr;
+        tagsRoot["tags"] = tagsObj;
+
+        std::string tags_path = m_data->session_dir + "/tags.json";
+        std::ofstream os(tags_path);
+        Json::StreamWriterBuilder b;
+        std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsRoot, &os);
     }
 
     if (m_data->audio_pipeline) gst_element_send_event(m_data->audio_pipeline, gst_event_new_eos());
@@ -446,6 +517,29 @@ void MainWindow::trigger_record_toggle() {
     on_record_toggle();
 }
 
+void MainWindow::on_tag_clicked(const std::string& tag_name) {
+    // Get current CPU time
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+    std::map<std::string, int> counts;
+    {
+        std::lock_guard<std::mutex> lock(m_data->data_mutex);
+        m_data->session_event_tags.push_back({tag_name, cpu_ts});
+        
+        for (const auto& t : m_data->session_event_tags) {
+            counts[t.first]++;
+        }
+    }
+
+    for (auto const& [name, btn] : m_tag_ui_buttons) {
+        if (counts.count(name)) {
+            btn->set_label(name + " (" + std::to_string(counts[name]) + ")");
+        }
+    }
+}
+
 void MainWindow::on_record_toggle() {
     if (m_data->is_quitting) return;
 
@@ -461,9 +555,10 @@ void MainWindow::on_record_toggle() {
 
         // Add start tag
         {
-             // long long now_ns = ...
-             long long ts = g_get_real_time() * 1000;
-             m_data->session_event_tags.push_back({final_stage_name + "_start", ts});
+             struct timespec ts;
+             clock_gettime(CLOCK_REALTIME, &ts);
+             long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+             m_data->recording_start_cpu_ts = cpu_ts;
         }
 
         if (m_data->audio_valve) {
@@ -480,16 +575,6 @@ void MainWindow::on_record_toggle() {
             if (s->valve) g_object_set(s->valve, "drop", !stream_rec, NULL);
         }
     } else {
-        // Add stop tag
-        {
-             std::string stage_name = m_data->config_stages.empty() ? "stage" : m_data->config_stages[active_idx];
-             char stage_buf[128];
-             snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", stage_name.c_str(), m_data->session_stage_cycle_count);
-             std::string final_stage_name = stage_buf;
-             long long ts = g_get_real_time() * 1000;
-             m_data->session_event_tags.push_back({final_stage_name + "_end", ts});
-        }
-
          if (m_data->audio_valve) {
             m_data->audio_is_recording = false;
             g_object_set(m_data->audio_valve, "drop", TRUE, NULL);
@@ -502,6 +587,17 @@ void MainWindow::on_record_toggle() {
              char stage_buf[128];
              snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", stage_name.c_str(), m_data->session_stage_cycle_count);
              std::string final_stage_name = stage_buf;
+
+             // Capture stage end
+             if (m_data->recording_start_cpu_ts > 0) {
+                 struct timespec ts;
+                 clock_gettime(CLOCK_REALTIME, &ts);
+                 long long end_cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+                 
+                 std::lock_guard<std::mutex> lock(m_data->data_mutex);
+                 m_data->session_stages.push_back({stage_name, m_data->recording_start_cpu_ts, end_cpu_ts});
+                 m_data->recording_start_cpu_ts = 0; // Reset for next run
+             }
 
              for (auto s : m_data->streams) {
                  s->last_run_stage_name = final_stage_name;
