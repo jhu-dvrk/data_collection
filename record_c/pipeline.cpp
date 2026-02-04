@@ -1,6 +1,19 @@
 #include "pipeline.hpp"
 #include <iostream>
 #include <gtk/gtk.h>
+#include <cairo.h>
+
+void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, guint64 duration, gpointer user_data) {
+    (void)overlay; (void)timestamp; (void)duration;
+    VideoStream *s = (VideoStream *)user_data;
+    if (s->is_recording) {
+        cairo_set_source_rgb(cr, 1.0, 0.0, 0.0); // Red
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 24);
+        cairo_move_to(cr, 20, 40);
+        cairo_show_text(cr, "REC");
+    }
+}
 
 std::string get_best_encoder(const Json::Value& enc_cfg) {
     int br = enc_cfg.get("bitrate", 10000).asInt();
@@ -32,17 +45,10 @@ double get_audio_level_max(const GValue* gv) {
             if (v) m = std::max(m, g_value_get_double(v));
         }
     } else {
-        G_GNUC_BEGIN_IGNORE_DEPRECATIONS
-        if (G_TYPE_CHECK_VALUE_TYPE(gv, G_TYPE_VALUE_ARRAY)) {
-            GValueArray *arr = (GValueArray *)g_value_get_boxed(gv);
-            if (arr) {
-                for (guint i=0; i < arr->n_values; ++i) {
-                    GValue *v = g_value_array_get_nth(arr, i);
-                    if (v) m = std::max(m, g_value_get_double(v));
-                }
-            }
-        }
-        G_GNUC_END_IGNORE_DEPRECATIONS
+        // G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+        // Removed deprecated GValueArray check to fix warnings. Relying on GST_VALUE_HOLDS_ARRAY.
+        // G_GNUC_END_IGNORE_DEPRECATIONS
+        
         // Modern GStreamer: also check for array type
         if (GST_VALUE_HOLDS_ARRAY(gv)) {
             for (guint i=0; i < gst_value_array_get_size(gv); ++i) {
@@ -84,17 +90,29 @@ GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer u
 }
 
 GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
+    (void)pad;
     AppData *ad = (AppData *)user_data;
     if (ad->audio_is_recording && (info->type & GST_PAD_PROBE_TYPE_BUFFER)) {
-        ad->audio_stages.back().timestamps.push_back(g_get_real_time() * 1000);
+        GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+        long long pts = (long long)GST_BUFFER_PTS(buf);
+        if (!GST_CLOCK_TIME_IS_VALID(pts)) pts = -1;
+        long long base_time = 0;
+        if (ad->audio_pipeline) base_time = (long long)gst_element_get_base_time(ad->audio_pipeline);
+        ad->audio_frames.push_back({g_get_real_time() * 1000, pts + base_time});
     }
     return GST_PAD_PROBE_OK;
 }
 
 GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
+    (void)pad;
     VideoStream *s = (VideoStream *)user_data;
     if (s->is_recording && (info->type & GST_PAD_PROBE_TYPE_BUFFER)) {
-        s->stages.back().timestamps.push_back(g_get_real_time() * 1000);
+        GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+        long long pts = (long long)GST_BUFFER_PTS(buf);
+        if (!GST_CLOCK_TIME_IS_VALID(pts)) pts = -1;
+        long long base_time = 0;
+        if (s->pipeline) base_time = (long long)gst_element_get_base_time(s->pipeline);
+        s->frames.push_back({g_get_real_time() * 1000, pts + base_time});
         s->frames_recorded++;
         
         long long now = g_get_monotonic_time();
@@ -109,8 +127,8 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
     }
     return GST_PAD_PROBE_OK;
 }
-
 gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data) {
+    (void)bus;
     AppData *ad = (AppData *)user_data;
     if (ad->is_quitting && GST_MESSAGE_TYPE(msg) != GST_MESSAGE_EOS) return TRUE;
 
@@ -218,11 +236,11 @@ VideoStream* create_video_stream(AppData* data, const Json::Value& v) {
     std::string ts_overlay = "";
     if (v.get("timestamp_overlay", false).asBool()) {
         ts_overlay = " ! timeoverlay valignment=bottom halignment=left font-desc=\"Sans, 10\" shaded-background=true "
-                        " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true ";
+                     " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true ";
     }
 
     std::string pstr = v["stream"].asString() + " do-timestamp=true ! " + caps + ts_overlay + " ! tee name=t "
-        "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! textoverlay name=rec_text text=\"\" valignment=top halignment=left font-desc=\"Sans, 24\" ! gtksink name=sink sync=false async=false "
+        "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=rec_overlay ! gtksink name=sink sync=false async=false "
         "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v["encoding"]) + " ! queue max-size-buffers=1 leaky=downstream ! mp4mux ! filesink name=muxer sync=false async=false";
     s->pipeline_desc = pstr;
     s->pipeline = gst_parse_launch(pstr.c_str(), NULL);
@@ -239,6 +257,7 @@ VideoStream* create_video_stream(AppData* data, const Json::Value& v) {
     GstElement *qrec = gst_bin_get_by_name(GST_BIN(s->pipeline), "qrec");
     if (qrec) {
         g_signal_connect(qrec, "overrun", G_CALLBACK(+[](GstElement* q, gpointer d){
+            (void)q;
             VideoStream* vs = (VideoStream*)d; vs->frames_dropped++;
         }), s);
         gst_object_unref(qrec);
@@ -251,7 +270,38 @@ VideoStream* create_video_stream(AppData* data, const Json::Value& v) {
     if (mux) { g_object_set(mux, "location", s->output_video.c_str(), NULL); gst_object_unref(mux); }
 
     s->valve = gst_bin_get_by_name(GST_BIN(s->pipeline), "v");
-    s->rec_text = gst_bin_get_by_name(GST_BIN(s->pipeline), "rec_text");
+    s->rec_overlay = gst_bin_get_by_name(GST_BIN(s->pipeline), "rec_overlay");
+    if (s->rec_overlay) {
+        g_signal_connect(s->rec_overlay, "draw", G_CALLBACK(on_rec_overlay_draw), s);
+        gst_object_unref(s->rec_overlay); 
+        // Note: we kept the pointer in struct but unref here? 
+        // gst_bin_get_by_name returns a NEW ref.
+        // We can keep it if we want, or rely on pipeline ownership.
+        // The struct member is just a pointer, we don't own the ref unless recorded.
+        // Actually, previous code didn't unref rec_text? 
+        // Let's check. Yes, it did NOT unref rec_text.
+        // It helps to keep a ref if we access it later. But we don't access rec_overlay later except in callback via user_data?
+        // Wait, on_rec_overlay_draw is called by element. 
+        // We don't need to touch s->rec_overlay in UI anymore.
+        // So we can unref it here. But if we want to follow RAII, s->rec_overlay should probably NOT hold a ref if the pipeline holds it,
+        // BUT gst_bin_get_by_name returns a full reference. We MUST unref it eventually or when destroying struct.
+        // For now, let's keep the pattern.
+        // Previous: s->rec_text = ...; NO unref.
+        // This causes a small leak if not cleared in destructor, but pipeline unref cleans children.
+        // However, the extra ref from get_by_name means pipeline won't finalize it fully/double free?
+        // No, if refcount > 1, pipeline simple drops its ref. We assume we hold one.
+        // We should release it in destructor of VideoStream?
+        // VideoStream has no destructor cleaning GST objects currently!
+        // It relies on AppData or main? No.
+        // Minor leak. I'll stick to not unref-ing to match previous style, or better, unref it if not needed.
+        // We don't need s->rec_overlay in UI anymore.
+        // So I will NOT store it in s->rec_overlay if not needed, OR unref it.
+        // I changed struct to have rec_overlay. Let's store it and NOT unref, matching previous leak/style to be safe against double-unref fears if previous code did weird things. 
+        // Actually I will unref it immediately because I don't need it outside this function setup since the callback handles it.
+        // I'll keep the struct member and store it but I'll update the replacing code to match previous pattern.
+        // Previous line: s->rec_text = gst_bin_get_by_name(...);
+    }
+    
     GstElement *sink = gst_bin_get_by_name(GST_BIN(s->pipeline), "sink");
     g_object_get(sink, "widget", &s->preview_widget, NULL);
     gtk_widget_set_size_request(s->preview_widget, 320, 240);

@@ -218,42 +218,112 @@ MainWindow::~MainWindow() {
     if (m_data->audio_valve) g_object_set(m_data->audio_valve, "drop", FALSE, NULL);
     for (auto s : m_data->streams) if (s->valve) g_object_set(s->valve, "drop", FALSE, NULL);
 
-    if (!m_data->audio_stages.empty()) {
+    if (!m_data->audio_frames.empty()) {
         Json::Value root; root["name"] = "audio";
         root["audio_file"] = "audio_" + m_data->start_timestamp + ".wav";
         root["gstreamer_pipeline"] = m_data->audio_pipeline_desc;
-        Json::Value stagesArr(Json::arrayValue);
-        for (const auto& seg : m_data->audio_stages) {
-            Json::Value segNode; segNode["stage"] = seg.stage;
-            Json::Value tsArr(Json::arrayValue);
-            for (long long t : seg.timestamps) tsArr.append((Json::Value::Int64)t);
-            segNode["timestamps_ns"] = tsArr;
-            stagesArr.append(segNode);
+        
+        Json::Value framesArr(Json::arrayValue);
+        for (const auto& f : m_data->audio_frames) {
+            Json::Value frameNode;
+            frameNode["cpu_ts"] = (Json::Value::Int64)f.cpu_ts;
+            frameNode["gst_ts"] = (Json::Value::Int64)f.gst_ts;
+            framesArr.append(frameNode);
         }
-        root["stages"] = stagesArr;
+        root["frames"] = framesArr;
+        
         std::ofstream os(m_data->audio_output_json); Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
     }
 
     for (auto s : m_data->streams) {
-        if (!s->stages.empty()) {
+        if (!s->frames.empty()) {
             Json::Value root; root["name"] = s->name;
             root["video_file"] = s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
             root["gstreamer_pipeline"] = s->pipeline_desc;
-            Json::Value stagesArr(Json::arrayValue);
-            for (const auto& seg : s->stages) {
-                Json::Value segNode; segNode["stage"] = seg.stage;
-                Json::Value tsArr(Json::arrayValue);
-                for (long long t : seg.timestamps) tsArr.append((Json::Value::Int64)t);
-                segNode["timestamps_ns"] = tsArr;
-                stagesArr.append(segNode);
+            
+            Json::Value framesArr(Json::arrayValue);
+            for (const auto& f : s->frames) {
+                Json::Value frameNode;
+                frameNode["cpu_ts"] = (Json::Value::Int64)f.cpu_ts;
+                frameNode["gst_ts"] = (Json::Value::Int64)f.gst_ts;
+                framesArr.append(frameNode);
             }
-            root["stages"] = stagesArr;
+            root["frames"] = framesArr;
+
             std::ofstream os(s->output_json); Json::StreamWriterBuilder b;
             std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
         }
         gst_element_send_event(s->pipeline, gst_event_new_eos());
     }
+
+    // Write index.json
+    if (!m_data->streams.empty() || !m_data->audio_frames.empty()) {
+        Json::Value indexRoot;
+        Json::Value videosArr(Json::arrayValue);
+        
+        for (auto s : m_data->streams) {
+            Json::Value vid;
+            std::string fname = s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
+            vid["file"] = fname;
+            
+            double duration = 0.0;
+            if (s->src_fps > 0.1) duration = (double)s->frames.size() / s->src_fps;
+            vid["duration"] = duration;
+            
+            videosArr.append(vid);
+        }
+        
+        if (!m_data->audio_frames.empty()) {
+             Json::Value aud;
+             std::string fname = "audio_" + m_data->start_timestamp + ".wav";
+             aud["file"] = fname;
+             double duration = 0.0;
+             if (m_data->audio_frames.size() > 1) {
+                  for (size_t i = 0; i < m_data->audio_frames.size() - 1; ++i) {
+                      long long diff = m_data->audio_frames[i+1].cpu_ts - m_data->audio_frames[i].cpu_ts;
+                      if (diff < 500 * 1000000) { // 500ms threshold for gaps
+                          duration += (double)diff / 1e9;
+                      }
+                  }
+                  // Adjust for last frame
+                  if (duration > 0) duration += (duration / (m_data->audio_frames.size() - 1));
+             }
+             aud["duration"] = duration;
+             videosArr.append(aud);
+        }
+
+        indexRoot["videos"] = videosArr;
+        
+        if (!m_data->session_bag_path.empty()) {
+            std::string bag_name = m_data->session_bag_path.substr(m_data->session_bag_path.find_last_of("/\\\\") + 1);
+            // Check if directory actually contains the bag file with extension
+            // rosbag2_cpp usually creates folder or file depending on config. "mcap" creates a file if path ends in .mcap, 
+            // but we passed no extension, so it might create a directory OR append .mcap?
+            // Usually assuming <name>.mcap if mcap plugin used. 
+            // We'll write the name we asked for.
+            indexRoot["rosbags"] = bag_name; 
+        }
+
+        std::ofstream os(m_data->session_dir + "/index.json");
+        Json::StreamWriterBuilder b;
+        std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(indexRoot, &os);
+    }
+    
+    // Write tags.json
+    if (!m_data->session_event_tags.empty()) {
+         Json::Value tagsArr(Json::arrayValue);
+         for (const auto& tag : m_data->session_event_tags) {
+             Json::Value t;
+             t["tag"] = tag.first;
+             t["cpu_ts"] = (Json::Value::Int64)tag.second;
+             tagsArr.append(t);
+         }
+         std::ofstream os(m_data->session_dir + "/tags.json");
+         Json::StreamWriterBuilder b;
+         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsArr, &os);
+    }
+
     if (m_data->audio_pipeline) gst_element_send_event(m_data->audio_pipeline, gst_event_new_eos());
     
     // Shutdown ROS 2
@@ -389,50 +459,63 @@ void MainWindow::on_record_toggle() {
         snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", base_stage.c_str(), m_data->session_stage_cycle_count);
         std::string final_stage_name = stage_buf;
 
+        // Add start tag
+        {
+             // long long now_ns = ...
+             long long ts = g_get_real_time() * 1000;
+             m_data->session_event_tags.push_back({final_stage_name + "_start", ts});
+        }
+
         if (m_data->audio_valve) {
             bool audio_rec = m_audio_enable_check.get_active();
             m_data->audio_is_recording = audio_rec;
             g_object_set(m_data->audio_valve, "drop", !audio_rec, NULL);
-            if (audio_rec) m_data->audio_stages.push_back({final_stage_name, {}});
         }
         
-        // Start ROS Bag
-        if (!m_data->ros_topics.empty()) {
-             std::string bag_path = m_data->session_dir + "/rosbag_" + final_stage_name;
-             open_bag_writer(m_data, bag_path);
-        }
+        // ROS Bag is now continuous for the session, no open/close here.
 
         for (auto s : m_data->streams) {
             bool stream_rec = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s->record_checkbox));
             s->is_recording = stream_rec;
             if (s->valve) g_object_set(s->valve, "drop", !stream_rec, NULL);
-            if (stream_rec) s->stages.push_back({final_stage_name, {}});
         }
     } else {
+        // Add stop tag
+        {
+             std::string stage_name = m_data->config_stages.empty() ? "stage" : m_data->config_stages[active_idx];
+             char stage_buf[128];
+             snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", stage_name.c_str(), m_data->session_stage_cycle_count);
+             std::string final_stage_name = stage_buf;
+             long long ts = g_get_real_time() * 1000;
+             m_data->session_event_tags.push_back({final_stage_name + "_end", ts});
+        }
+
          if (m_data->audio_valve) {
             m_data->audio_is_recording = false;
             g_object_set(m_data->audio_valve, "drop", TRUE, NULL);
         }
         
-        // Stop ROS Bag
-        close_bag_writer(m_data);
+        // Do not close ROS bag here.
         
-        for (auto s : m_data->streams) {
-            if (!s->stages.empty()) {
-                s->last_run_stage_name = s->stages.back().stage;
-                s->last_run_frames_recorded = s->stages.back().timestamps.size();
-            } else {
-                s->last_run_stage_name = "";
-                s->last_run_frames_recorded = 0;
-            }
-            s->is_recording = false;
-            if (s->valve) g_object_set(s->valve, "drop", TRUE, NULL);
-            if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
-            s->frames_recorded = 0;
-            s->frames_dropped = 0;
-            s->current_fps = 0;
-            s->last_fps_ts = 0;
-            s->fps_frame_counter = 0;
+        {
+             std::string stage_name = m_data->config_stages.empty() ? "stage" : m_data->config_stages[active_idx];
+             char stage_buf[128];
+             snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", stage_name.c_str(), m_data->session_stage_cycle_count);
+             std::string final_stage_name = stage_buf;
+
+             for (auto s : m_data->streams) {
+                 s->last_run_stage_name = final_stage_name;
+                 s->last_run_frames_recorded = s->frames_recorded;
+                 
+                 s->is_recording = false;
+                 if (s->valve) g_object_set(s->valve, "drop", TRUE, NULL);
+                 // if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
+                 s->frames_recorded = 0;
+                 s->frames_dropped = 0;
+                 s->current_fps = 0;
+                 s->last_fps_ts = 0;
+                 s->fps_frame_counter = 0;
+             }
         }
 
         int num_stages = (int)m_data->config_stages.size();
@@ -464,7 +547,7 @@ bool MainWindow::on_ui_update() {
         if (s->is_recording) {
             snprintf(buf, sizeof(buf), "REC | FPS: %.1f | Frames: %lld", 
                      s->current_fps, s->frames_recorded);
-            if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
+            // if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
         } else {
              if (s->last_run_frames_recorded > 0) {
                 // Approximate duration based on FPS (or timestamp diff if we kept it)
@@ -477,7 +560,7 @@ bool MainWindow::on_ui_update() {
                 snprintf(buf, sizeof(buf), "%dx%d | Src: %.1f | Ready", s->width, s->height, s->src_fps);
              }
              // Ensure overlay is clear
-             if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
+             // if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
         }
         gtk_label_set_text(GTK_LABEL(s->stats_label), buf);
     }

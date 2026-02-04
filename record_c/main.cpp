@@ -117,6 +117,12 @@ int main(int argc, char *argv[]) {
     data.session_dir = data.data_directory + "/" + data.start_timestamp;
     g_mkdir_with_parents(data.session_dir.c_str(), 0777);
 
+    // Initialize ROS bag for the session
+    if (!data.ros_topics.empty()) {
+        data.session_bag_path = data.session_dir + "/rosbag_" + data.start_timestamp;
+        open_bag_writer(&data, data.session_bag_path);
+    }
+
     for (const auto& root : config_roots) {
         for (const auto& v : root["videos"]) {
             VideoStream* s = create_video_stream(&data, v);
