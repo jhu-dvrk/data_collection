@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 #include <ctime>
+#include <unordered_set>
 
 #include <gtkmm.h>
 #include <gst/gst.h>
@@ -121,6 +122,17 @@ int main(int argc, char *argv[]) {
         }
         data.config_tags.insert(data.config_tags.end(), cfg.tags.begin(), cfg.tags.end());
         data.ros_topics.insert(data.ros_topics.end(), cfg.ros_topics.begin(), cfg.ros_topics.end());
+    }
+
+    // Deduplicate ROS topics while preserving first-seen order
+    if (!data.ros_topics.empty()) {
+        std::unordered_set<std::string> seen;
+        std::vector<std::string> deduped;
+        deduped.reserve(data.ros_topics.size());
+        for (const auto& topic : data.ros_topics) {
+            if (seen.insert(topic).second) deduped.push_back(topic);
+        }
+        data.ros_topics.swap(deduped);
     }
     if (data.config_stages.empty()) data.config_stages.push_back("stage");
 
