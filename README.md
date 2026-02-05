@@ -1,6 +1,6 @@
 # Video Data Record
 
-A multi-stream video record application using Python, PyQt5, OpenCV, and GStreamer. It allows creating flexible video streams via JSON configuration, provides live previews, and supports synchronized recording with timestamps.  ROS topics can also be recorded along the videos.  Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
+A multi-stream video record application using C++, GStreamer, and GTKmm. It allows creating flexible video streams via JSON configuration, provides live previews, and supports synchronized recording with timestamps. ROS topics can also be recorded along the videos. Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
 
 The application also integrates with ROS2 for remote control and status monitoring.
 
@@ -9,11 +9,10 @@ The application also integrates with ROS2 for remote control and status monitori
 *   **ROS2**: The application is a ROS2 node and requires a working ROS2 installation (Humble, Jazzy, etc.).
 *   **System Dependencies**:
     ```bash
-    sudo apt install libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-plugins-base-apps python3-opencv python3-numpy python3-pyqt5 python3-pyqt5.qtmultimedia libqt5multimedia5-plugins qmlglsink libgtkmm-3.0-dev
+    sudo apt install libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-plugins-base-apps python3-opencv python3-numpy python3-pyqt5 python3-pyqt5.qtmultimedia libqt5multimedia5-plugins libgtkmm-3.0-dev
     ```
 *   **Python Dependencies**:
-    - `PyQt5`: GUI framework for the record and video_tag.
-    - `GStreamer (gi)`: Core pipeline handling for recording and playback.
+    - `GStreamer (gi)`: Core pipeline handling for video extraction.
     - `argparse`, `json`, `signal`: Standard libraries for configuration and signal handling.
     - `opencv-python`: Used by the extract for image processing.
 
@@ -166,37 +165,28 @@ ros2 run data_collection extract -d 20260117_153206 -l
 
 ### 5. Synchronization Verification
 
-The `check_timestamps.py` script verifies the synchronization between the recording's filenames (based on system time) and the burned-in GStreamer timestamps. It uses Tesseract OCR to read the "Timestamp overlay" strip.
+The `check_timestamps.py` script (located in the `tests/` directory) verifies the synchronization between the recording's filenames (based on system time) and the burned-in GStreamer timestamps. It uses Tesseract OCR to read the "Timestamp overlay" strip.
+
+To verify timestamps in extracted frames:
 
 ```bash
-ros2 run data_collection check_timestamps -d 20260117_153206/extracted
-```
-
-### 6. Video Tag Tool
-
-The `video_tag` tool is a PyQt5-based GUI application designed for post-recording data curation. It allows users to review recorded videos with frame-accurate precision and assign temporal labels (stages) or discrete frame tags.
-
-```bash
-# Run via ROS2
-ros2 run data_collection video_tag -v video.mp4 -c config.json
-
-# Run directly
-python3 -m data_collection.video_tag -v video.mp4 -c config.json
+python3 tests/check_timestamps.py -d 20260117_153206/extracted
 ```
 
 **Key Features**:
-- **Frame-Accurate Seeking**: Navigate to exact frame indices using a slider or A/D keys.
-- **Tag Management**: Toggle stages (start/end pairs) or single-frame tags.
-- **Shortcuts**: Numeric keys (1-0) for the first 10 tags, space/S for play/pause.
-- **Persistence**: Saves annotations to a `_tags.json` file in a structured format.
-- **Graceful Exit**: Support for `Ctrl+C` and "Q" key with prompts to save unsaved changes.
-
-**Key Features (check_timestamps)**:
 - **Automatic ROI**: Specifically targets the bottom 30px black timestamp overlay strip for speed and accuracy.
 - **Latency Analysis**: Calculates the average difference between system capture time and the video's internal clock.
 - **Jitter Measurement**: Calculates the standard deviation of latency across all frames.
 - **Transition Detection**: Identifies frame boundaries where the integer second changes to estimate sub-second precision.
 - **Validation**: Filters out OCR misreads and handles logical day-wrapping.
+
+### 6. Video Tag Tool
+
+The `video_tag` C++ application is designed for post-recording data curation. It allows users to review recorded videos with frame-accurate precision and assign temporal labels (stages) or discrete frame tags.
+
+```bash
+ros2 run data_collection video_tag -v video.mp4 -c config.json
+```
 
 ## ROS2 Integration
 

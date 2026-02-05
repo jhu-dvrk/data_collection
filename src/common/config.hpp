@@ -11,7 +11,7 @@ struct VideoEncoding {
     int width = 0;
     int height = 0;
     int frame_rate = 0;
-    int bitrate = 10000;
+    int bitrate_kbps = 10000;
     int speed_preset = 5;
     int key_int_max = 30;
 };

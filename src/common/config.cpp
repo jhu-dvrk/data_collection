@@ -37,7 +37,8 @@ std::vector<VideoConfig> Config::parse_videos(const Json::Value& root) {
             if (enc.isMember("width")) cfg.encoding.width = enc["width"].asInt();
             if (enc.isMember("height")) cfg.encoding.height = enc["height"].asInt();
             if (enc.isMember("frame_rate")) cfg.encoding.frame_rate = enc["frame_rate"].asInt();
-            if (enc.isMember("bitrate")) cfg.encoding.bitrate = enc["bitrate"].asInt();
+            if (enc.isMember("bitrate_kbps")) cfg.encoding.bitrate_kbps = enc["bitrate_kbps"].asInt();
+            else if (enc.isMember("bitrate")) cfg.encoding.bitrate_kbps = enc["bitrate"].asInt();
             if (enc.isMember("speed_preset")) cfg.encoding.speed_preset = enc["speed_preset"].asInt();
             if (enc.isMember("key_int_max")) cfg.encoding.key_int_max = enc["key_int_max"].asInt();
         }

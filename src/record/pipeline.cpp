@@ -24,7 +24,7 @@ void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, gu
 }
 
 std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
-    int br = enc_cfg.bitrate;
+    int br = enc_cfg.bitrate_kbps;
     int preset = enc_cfg.speed_preset;
     int keyint = enc_cfg.key_int_max;
 
@@ -35,13 +35,13 @@ std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
             gst_object_unref(f);
             std::string name(c);
             std::cout << "Selected H264 Encoder: " << name << std::endl;
-            if (name == "nvh264enc") return "nvh264enc bitrate=" + std::to_string(br * 1000) + " zerolatency=true ! h264parse";
-            if (name == "nvv4l2h264enc") return "nvv4l2h264enc bitrate=" + std::to_string(br * 1000) + " preset-level=4 control-rate=1 ! h264parse";
-            if (name == "vaapih264enc") return "vaapih264enc bitrate=" + std::to_string(br) + " ! h264parse";
-            if (name == "x264enc") return "x264enc bitrate=" + std::to_string(br) + " speed-preset=" + std::to_string(preset) + " tune=zerolatency key-int-max=" + std::to_string(keyint) + " threads=" + std::to_string(app_max_threads) + " ! h264parse";
+            if (name == "nvh264enc") return "nvh264enc bitrate=" + std::to_string(br) + " zerolatency=true";
+            if (name == "nvv4l2h264enc") return "nvv4l2h264enc bitrate=" + std::to_string(br) + " preset-level=4 control-rate=1";
+            if (name == "vaapih264enc") return "vaapih264enc bitrate=" + std::to_string(br);
+            if (name == "x264enc") return "x264enc bitrate=" + std::to_string(br) + " speed-preset=" + std::to_string(preset) + " tune=zerolatency key-int-max=" + std::to_string(keyint) + " threads=" + std::to_string(app_max_threads);
         }
     }
-    return "x264enc ! h264parse";
+    return "x264enc";
 }
 
 double get_audio_level_max(const GValue* gv) {
@@ -331,7 +331,7 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
         "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=rec_overlay ! gtksink name=sink sync=false async=false ";
     
     if (s->record_enabled) {
-        pstr += "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v.encoding) + " ! queue max-size-buffers=1 leaky=downstream ! mp4mux ! filesink name=muxer sync=false async=false";
+        pstr += "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v.encoding) + " ! queue max-size-buffers=1 leaky=downstream ! h264parse ! mp4mux ! filesink name=muxer sync=false async=false";
     }
 
     s->pipeline_desc = pstr;

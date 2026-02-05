@@ -26,10 +26,10 @@ pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
 # Common Library: data_collection
 add_library(data_collection_lib
-  common/config.cpp
+  src/common/config.cpp
 )
 target_include_directories(data_collection_lib PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/common>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/common>
   $<INSTALL_INTERFACE:include>
   ${JSONCPP_INCLUDE_DIRS}
 )
@@ -39,27 +39,27 @@ target_link_libraries(data_collection_lib
 # Alias for easier usage if needed, though target name is fine
 set_target_properties(data_collection_lib PROPERTIES OUTPUT_NAME "data_collection")
 
-# C++ Executable: record_c
-add_executable(record_c 
-  record_c/main.cpp
-  record_c/context.cpp
-  record_c/pipeline.cpp
-  record_c/ui.cpp
-  record_c/ros_node.cpp
+# C++ Executable: record
+add_executable(record 
+  src/record/main.cpp
+  src/record/context.cpp
+  src/record/pipeline.cpp
+  src/record/ui.cpp
+  src/record/ros_node.cpp
 )
-ament_target_dependencies(record_c
+ament_target_dependencies(record
   rclcpp
   std_msgs
   sensor_msgs
   rosbag2_cpp
 )
-target_include_directories(record_c PRIVATE
+target_include_directories(record PRIVATE
   ${GST_INCLUDE_DIRS}
   ${GTK_INCLUDE_DIRS}
   ${GTKMM_INCLUDE_DIRS}
   ${JSONCPP_INCLUDE_DIRS}
 )
-target_link_libraries(record_c
+target_link_libraries(record
   ${GST_LIBRARIES}
   ${GTK_LIBRARIES}
   ${GTKMM_LIBRARIES}
@@ -69,22 +69,22 @@ target_link_libraries(record_c
 
 
 # Install C++ executable
-install(TARGETS record_c
+install(TARGETS record
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# C++ Executable: tag_c
-add_executable(tag_c
-  record_c/tag_main.cpp
-  record_c/tag_ui.cpp
+# C++ Executable: video_tag
+add_executable(video_tag
+  src/video_tag/tag_main.cpp
+  src/video_tag/tag_ui.cpp
 )
-target_include_directories(tag_c PRIVATE
+target_include_directories(video_tag PRIVATE
   ${GST_INCLUDE_DIRS}
   ${GTK_INCLUDE_DIRS}
   ${GTKMM_INCLUDE_DIRS}
   ${JSONCPP_INCLUDE_DIRS}
 )
-target_link_libraries(tag_c
+target_link_libraries(video_tag
   ${GST_LIBRARIES}
   ${GTK_LIBRARIES}
   ${GTKMM_LIBRARIES}
@@ -93,22 +93,22 @@ target_link_libraries(tag_c
   data_collection_lib
 )
 
-# Install C++ executable tag_c
-install(TARGETS tag_c
+# Install C++ executable video_tag
+install(TARGETS video_tag
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# C++ Executable: latency_c
-add_executable(latency_c
-  latency_c/main.cpp
+# C++ Executable: video_latency
+add_executable(video_latency
+  src/video_latency/main.cpp
 )
-target_include_directories(latency_c PRIVATE
+target_include_directories(video_latency PRIVATE
   ${GST_INCLUDE_DIRS}
   ${GTK_INCLUDE_DIRS}
   ${GTKMM_INCLUDE_DIRS}
   ${JSONCPP_INCLUDE_DIRS}
 )
-target_link_libraries(latency_c
+target_link_libraries(video_latency
   ${GST_LIBRARIES}
   ${GTK_LIBRARIES}
   ${GTKMM_LIBRARIES}
@@ -116,7 +116,7 @@ target_link_libraries(latency_c
   gstvideo-1.0
   data_collection_lib
 )
-install(TARGETS latency_c
+install(TARGETS video_latency
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -125,9 +125,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Python Scripts (wrappers)
 install(PROGRAMS
-  scripts/record
   scripts/extract
-  scripts/video_tag
   DESTINATION lib/${PROJECT_NAME}
 )
 

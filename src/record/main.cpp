@@ -28,6 +28,10 @@ static gboolean on_sigint(gpointer user_data) {
 }
 
 int main(int argc, char *argv[]) {
+    // Clear Snap-related environment variables that cause symbol lookup errors
+    unsetenv("GTK_PATH");
+    unsetenv("LOCPATH");
+
     // Initialize GStreamer first (strips GST args)
     gst_init(&argc, &argv);
 
@@ -92,7 +96,6 @@ int main(int argc, char *argv[]) {
     std::thread ros_thread([&]() {
         rclcpp::spin(data.node);
     });
-    ros_thread.detach();
 
     std::vector<Json::Value> config_roots; // Keeping this for now if needed, but preferably use AppConfig objects
     std::vector<dc::AppConfig> app_configs;
@@ -153,5 +156,13 @@ int main(int argc, char *argv[]) {
     // start_ui_update_loop(&data); // Replaced by MainWindow timer
     Gtk::Main::run(window);
     
+    // Shutdown ROS 2 and join thread
+    if (rclcpp::ok()) {
+        rclcpp::shutdown();
+    }
+    if (ros_thread.joinable()) {
+        ros_thread.join();
+    }
+
     return 0;
 }

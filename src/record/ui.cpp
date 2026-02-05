@@ -186,32 +186,22 @@ MainWindow::MainWindow(AppData* data)
     }
 
     // --- Tags Frame (Right Side) ---
-    Gtk::Label* tags_lbl = Gtk::manage(new Gtk::Label());
-    tags_lbl->set_markup("<b>Tags</b>");
-    m_tags_frame.set_label_widget(*tags_lbl);
-    m_tags_frame.add(m_tags_vbox);
-    m_tags_vbox.set_border_width(FRAME_PADDING_PX);
-    right_side_vbox->pack_start(m_tags_frame, Gtk::PACK_EXPAND_WIDGET);
+    if (!m_data->config_tags.empty()) {
+        Gtk::Label* tags_lbl = Gtk::manage(new Gtk::Label());
+        tags_lbl->set_markup("<b>Tags</b>");
+        m_tags_frame.set_label_widget(*tags_lbl);
+        m_tags_frame.add(m_tags_vbox);
+        m_tags_vbox.set_border_width(FRAME_PADDING_PX);
+        right_side_vbox->pack_start(m_tags_frame, Gtk::PACK_EXPAND_WIDGET);
 
-    // Get tags from config
-    std::vector<std::string> session_tags;
-    // We can assume tags are same for all videos, collect them once from AppData
-    // Actually they are in AppData::session_event_tags but we want the list of POSSIBLE tags
-    // Let's look at config_roots in main.cpp to see where they go.
-    // main.cpp currently doesn't store the tag NAMES list in AppData. 
-    // I should add them to AppData.
-
-    // Let's check context.hpp again.
-    // AppData has std::vector<std::string> config_stages;
-    // Let's add std::vector<std::string> config_tags; to AppData.
-
-    for (const auto& tag : m_data->config_tags) {
-        Gtk::Button* btn = Gtk::manage(new Gtk::Button(tag));
-        m_tag_ui_buttons[tag] = btn;
-        btn->signal_clicked().connect([this, tag]() {
-            this->on_tag_clicked(tag);
-        });
-        m_tags_vbox.pack_start(*btn, Gtk::PACK_SHRINK);
+        for (const auto& tag : m_data->config_tags) {
+            Gtk::Button* btn = Gtk::manage(new Gtk::Button(tag));
+            m_tag_ui_buttons[tag] = btn;
+            btn->signal_clicked().connect([this, tag]() {
+                this->on_tag_clicked(tag);
+            });
+            m_tags_vbox.pack_start(*btn, Gtk::PACK_SHRINK);
+        }
     }
 
     // --- Bottom Controls ---
@@ -395,8 +385,17 @@ MainWindow::~MainWindow() {
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsRoot, &os);
     }
 
-    if (m_data->audio_pipeline) gst_element_send_event(m_data->audio_pipeline, gst_event_new_eos());
+    if (m_data->audio_pipeline) {
+        gst_element_send_event(m_data->audio_pipeline, gst_event_new_eos());
+        gst_element_set_state(m_data->audio_pipeline, GST_STATE_NULL);
+    }
     
+    for (auto s : m_data->streams) {
+        if (s->pipeline) {
+            gst_element_set_state(s->pipeline, GST_STATE_NULL);
+        }
+    }
+
     // Shutdown ROS 2
     if (rclcpp::ok()) rclcpp::shutdown();
     
