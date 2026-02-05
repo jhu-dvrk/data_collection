@@ -228,6 +228,17 @@ MainWindow::~MainWindow() {
 
     // Shutdown logic (moved from on_window_destroy_cb)
     m_data->is_quitting = true;
+
+    auto send_eos_and_wait = [](GstElement* pipeline) {
+        if (!pipeline) return;
+        gst_element_send_event(pipeline, gst_event_new_eos());
+        GstBus* bus = gst_element_get_bus(pipeline);
+        if (bus) {
+            gst_bus_timed_pop_filtered(bus, 2 * GST_SECOND, (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
+            gst_object_unref(bus);
+        }
+        gst_element_set_state(pipeline, GST_STATE_NULL);
+    };
     
     // Force stop recording logic manual override (since toggle checks is_quitting)
     // Actually, we just need to ensure valves are open and files are written.
@@ -239,6 +250,10 @@ MainWindow::~MainWindow() {
     // Unblock valves to let EOS pass through
     if (m_data->audio_valve) g_object_set(m_data->audio_valve, "drop", FALSE, NULL);
     for (auto s : m_data->streams) if (s->valve) g_object_set(s->valve, "drop", FALSE, NULL);
+
+    // Flush pipelines so container writers finalize cleanly
+    send_eos_and_wait(m_data->audio_pipeline);
+    for (auto s : m_data->streams) send_eos_and_wait(s->pipeline);
 
     if (!m_data->audio_frames.empty()) {
         Json::Value root; root["name"] = "audio";
