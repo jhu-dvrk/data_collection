@@ -55,14 +55,14 @@
                         "description": "Whether to record this stream by default",
                         "default": true
                     },
-                    "time_watermark": {
+                    "timestamp_overlay": {
                         "type": "boolean",
                         "description": "Whether to burn GStreamer timestamps into the video by default",
                         "default": false
                     },
                     "tee_glimage_sink": {
                         "type": "boolean",
-                        "description": "Whether to add a separate glimagesink window before time overlays (useful for fullscreen preview without watermarks)",
+                        "description": "Whether to add a separate glimagesink window before timestamp overlays (useful for fullscreen preview without overlays)",
                         "default": false
                     },
                     "encoding": {

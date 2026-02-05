@@ -193,7 +193,7 @@ def verify_frames(frames_dir, num_jobs=None):
         
         if img_0 is not None:
             h, w = img_0.shape[:2]
-            # The watermark is in a 30px strip at the bottom
+            # The timestamp overlay is in a 30px strip at the bottom
             strip_height = 30
             strip_start_y = h - strip_height
             

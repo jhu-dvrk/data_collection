@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-import rclpy
-# Initialize ROS immediately
-if not rclpy.ok():
-    rclpy.init(args=[])
-
 import sys
 import os
 import json
@@ -16,8 +11,8 @@ import subprocess
 import signal
 import shutil
 import rosbag2_py
-import queue
 
+import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool
 from sensor_msgs.msg import Joy
@@ -44,7 +39,7 @@ class VideoThread(QThread):
         # Priority list of encoders: NVENC, VAAPI, software (x264)
         # We test availability using gst-inspect-1.0
         encoders = [
-            ("nvh264enc", "nvh264enc bitrate={bitrate_kb} ! h264parse"),
+            ("nvh264enc", "nvh264enc bitrate={bitrate_bits} ! h264parse"),
             ("nvv4l2h264enc", "nvv4l2h264enc bitrate={bitrate_bits} preset-level=4 control-rate=1 ! h264parse"),
             ("vaapih264enc", "vaapih264enc bitrate={bitrate_kb} ! h264parse"),
             ("x264enc", "x264enc bitrate={bitrate_kb} speed-preset={speed_preset} key-int-max={key_int_max}")
@@ -54,7 +49,7 @@ class VideoThread(QThread):
             try:
                 result = subprocess.run(["gst-inspect-1.0", plugin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if result.returncode == 0:
-                    print(f"Detected GStreamer hardware encoder: {plugin}", flush=True)
+                    print(f"Detected GStreamer hardware encoder: {plugin}")
                     cls._best_encoder = (plugin, video)
                     return cls._best_encoder
             except Exception:
@@ -70,26 +65,32 @@ class VideoThread(QThread):
         self.name = video_config['name']
         self._run_flag = True
         
-        # Capture and Recording
-        self.cap = None
-        self.record_proc = None
-        self.session_video_path = None
-        self.json_filepath = None
-        
         # Recording state
         self.is_recording = False
         self.rec_requested = False
         self.rec_base_dir = "."
-        self.stage_name = ""
+        self.stage_name = None
+        self.writer = None
+        
+        # Track last recording metadata
+        self.last_video_name = None
+        self.last_json_path = None
+        self.last_video_duration = 0.0
+        
+        # UI state
         self.preview_enabled = True
-        
-        # Options
-        self.time_watermark = video_config.get('time_overlay', False)
-        
-        # Internal state
+        self.timestamp_overlay = video_config.get('timestamp_overlay', False)
         self._restart_cap = False
+        
+        # Stream info
+        self.width = 640
+        self.height = 480
+        self.fps = 30
+        
+        # Timestamps
         self.frame_timestamps = []
         self.rec_start_epoch = None
+        self.rec_start_gst = None
         
         # Performance tracking
         self.frame_count = 0
@@ -97,198 +98,293 @@ class VideoThread(QThread):
         self.last_frame_time = None
         self.fps_actual = 0.0
         self.fps_samples = []
-        self.width = 0
-        self.height = 0
-        
-        # Metadata for session index
-        self.last_video_name = None
-        self.last_json_path = None
-        self.last_video_duration = 0.0
 
-    def _get_capture_string(self):
-        """Construct a GStreamer capture string for OpenCV."""
+    def _create_capture_pipeline(self):
+        """Create and open the GStreamer capture pipeline.
+        
+        Returns:
+            cv2.VideoCapture object if successful, None otherwise
+        """
         source_str = self.video_config.get('stream')
         if not source_str:
+            print(f"Error: No stream defined for video '{self.name}'")
             return None
+        
+        # Tee for video sink (before overlays)
+        tee_glimage_sink = self.video_config.get('tee_glimage_sink', False)
+        tee_str = ""
+        if tee_glimage_sink:
+            # Auto-detect display server: qmlglsink for Wayland, glimagesink for X11
+            import os
+            session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
+            wayland_display = os.environ.get('WAYLAND_DISPLAY', '')
             
-        # Optional overlay in preview
+            if session_type == 'wayland' or wayland_display:
+                video_sink = "qmlglsink force-aspect-ratio=false"
+            else:
+                video_sink = "glimagesink force-aspect-ratio=false"
+            
+            tee_str = (
+                " ! tee name=preview_tee "
+                f"preview_tee. ! queue ! {video_sink} "
+                "preview_tee. ! queue "
+            )
+        
+        # Overlay Pipeline: Add black strip and timestamps
+        # videobox: adds 30px height to bottom (negative value adds border)
         overlay_str = ""
-        if self.time_watermark:
+        if self.timestamp_overlay:
+            # Set datetime-epoch based on current local time with timezone info
             now = datetime.datetime.now().astimezone()
             now_iso = now.isoformat(timespec='milliseconds')
+            # Format timezone for GStreamer (needs to be escaped or quoted usually, but ISO 8601 is generally okay)
             overlay_str = (
                 " ! videobox bottom=-30 "
                 f" ! timeoverlay time-mode=buffer-time show-times-as-dates=true datetime-epoch={now_iso} datetime-format=\"%Y-%m-%d %H:%M:%S.%f\" valignment=bottom halignment=left font-desc=\"Sans, 10\" ypad=6 "
             )
+    
+        # Construct GStreamer video pipeline for OpenCV capture
+        # We need BGR frames for OpenCV
+        read_video_pipeline = f"{source_str} {tee_str} {overlay_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
+        
+        # Note: We must specify cv2.CAP_GSTREAMER to force GStreamer backend
+        cap = cv2.VideoCapture(read_video_pipeline, cv2.CAP_GSTREAMER)
+
+        if not cap.isOpened():
+            print(f"Error: Could not open video '{self.name}'")
+            return None
+
+        # Attempt to get stream properties
+        gst_fps = cap.get(cv2.CAP_PROP_FPS)
+        if gst_fps > 0:
+            self.fps = gst_fps
+        
+        return cap
+
+    def _process_frame_loop(self, cap):
+        """Process frames from the capture device.
+        
+        Args:
+            cap: OpenCV VideoCapture object
             
-        # Return a GStreamer pipeline ending in appsink for OpenCV
-        return f"{source_str} {overlay_str} ! videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1"
+        Returns:
+            True if should restart capture, False if should exit
+        """
+        while self._run_flag and not self._restart_cap:
+            # Only read from video if somebody needs it (recording, preview)
+            # We also check rec_requested so we can start recording even if no preview
+            if self.rec_requested or self.is_recording or self.preview_enabled:
+                ret, cv_img = cap.read()
+                if ret:
+                    # Track frame performance
+                    self.frame_count += 1
+                    current_time = time.time()
+                    if self.last_frame_time is not None:
+                        frame_delta = current_time - self.last_frame_time
+                        if frame_delta > 0:
+                            instant_fps = 1.0 / frame_delta
+                            self.fps_samples.append(instant_fps)
+                            # Keep last 30 samples for rolling average
+                            if len(self.fps_samples) > 30:
+                                self.fps_samples.pop(0)
+                            self.fps_actual = np.mean(self.fps_samples)
+                    self.last_frame_time = current_time
+                    
+                    h, w, ch = cv_img.shape
+                    self.width = w
+                    self.height = h
+                    
+                    # Get timestamp from GStreamer source (milliseconds)
+                    ts = cap.get(cv2.CAP_PROP_POS_MSEC)
+                    
+                    # Fallback to system time if GStreamer cannot provide position (common for live streams)
+                    if ts <= 0:
+                        ts = time.time() * 1000.0
+
+                    # Handle Recording State Changes (using clean frame)
+                    self._handle_recording(cv_img, ts)
+
+                    # Add blinking red circle if recording
+                    if self.writer:
+                        # Blink every 0.5 seconds (on/off cycle 1 sec)
+                        if int(time.time() * 2) % 2 == 0:
+                            # Draw red circle (BGR: 0, 0, 255) at top-left
+                            cv2.circle(cv_img, (30, 30), 10, (0, 0, 255), -1)
+
+                    if self.preview_enabled:
+                        self.change_pixmap_signal.emit(cv_img)
+                else:
+                    # Loop ended or error - count as dropped frame
+                    self.dropped_frames += 1
+                    # Short sleep to avoid busy loop if error persists
+                    self.msleep(10)
+            else:
+                # No one needs the frame, avoid conversion by not calling cap.read()
+                self.msleep(100)
+        
+        # Return True if restart requested, False otherwise
+        return self._restart_cap
 
     def run(self):
-        """Main thread loop using cv2.VideoCapture."""
+        """Main thread loop - handles capture lifecycle with automatic restart."""
         while self._run_flag:
-            pipeline_str = self._get_capture_string()
-            if not pipeline_str:
+            # Create capture pipeline
+            cap = self._create_capture_pipeline()
+            if cap is None:
+                # Wait before retrying
                 self.msleep(1000)
                 continue
-                
-            self.cap = cv2.VideoCapture(pipeline_str, cv2.CAP_GSTREAMER)
-            if not self.cap.isOpened():
-                print(f"Error: Could not open camera {self.name}")
-                self.msleep(2000)
-                continue
-                
+            
+            # Reset restart flag
             self._restart_cap = False
-            while self._run_flag and not self._restart_cap:
-                ret, frame = self.cap.read()
-                if not ret:
-                    break
-                    
-                # Track performance
-                self.frame_count += 1
-                if self.frame_count == 1:
-                    self.height, self.width = frame.shape[:2]
-                current_time = time.time()
-                if self.last_frame_time is not None:
-                    delta = current_time - self.last_frame_time
-                    if delta > 0:
-                        self.fps_samples.append(1.0 / delta)
-                        if len(self.fps_samples) > 30: self.fps_samples.pop(0)
-                        self.fps_actual = np.mean(self.fps_samples)
-                self.last_frame_time = current_time
-                
-                # Check recording state
-                if self.rec_requested and not self.is_recording:
-                    self._start_external_recording()
-                elif not self.rec_requested and self.is_recording:
-                    self._stop_external_recording()
-                    
-                if self.is_recording:
-                    self.frame_timestamps.append({
-                        'ts': current_time,
-                        'frame': self.frame_count
-                    })
-                    # Blink red circle
-                    if int(time.time() * 2) % 2 == 0:
-                        cv2.circle(frame, (30, 30), 10, (0, 0, 255), -1)
-                
-                if self.preview_enabled:
-                    self.change_pixmap_signal.emit(frame)
-                    
-            self.cap.release()
-            self._stop_external_recording()
-            if not self._run_flag:
+            
+            # Process frames until restart or exit
+            should_restart = self._process_frame_loop(cap)
+            
+            # Cleanup capture
+            cap.release()
+            
+            # Exit if not restarting
+            if not should_restart:
                 break
+        
+        # Final cleanup
+        self._stop_writer()
+            
+    def _handle_recording(self, frame, timestamp):
+        # Check if we need to start recording
+        if self.rec_requested and not self.is_recording:
+             if self.video_config.get('record', True):
+                 self._start_writer()
+             else:
+                 print(f"Skipping recording for video {self.name} (record=false)")
+                 # We set is_recording to True to suppress further checks until stopped
+                 self.is_recording = True 
+                 # But we must mark that no writer exists so we don't try to write
+                 pass
+
+        # Check if we need to stop recording
+        elif not self.rec_requested and self.is_recording:
+            self._stop_writer()
+
+        # Write frame if writer exists
+        if self.is_recording and self.writer:
+            try:
+                # Calculate absolute timestamp (nanoseconds since epoch)
+                if self.rec_start_epoch is None:
+                    self.rec_start_epoch = time.time()
+                    self.rec_start_gst = timestamp
+                    
+                # Calculate nanoseconds using GStreamer stream position delta
+                delta_ms = (timestamp - self.rec_start_gst)
+                abs_ts_ns = int(self.rec_start_epoch * 1e9) + int(delta_ms * 1e6)
                 
-    def _start_external_recording(self):
-        """Launch a separate gst-launch-1.0 process for recording."""
-        source_str = self.video_config.get('stream')
-        encoding = self.video_config.get('encoding', {})
-        bitrate_kb = int(encoding.get('bitrate', 10000))
-        bitrate_bits = bitrate_kb * 1000
+                self.frame_timestamps.append(abs_ts_ns)
+                
+                self.writer.write(frame)
+            except Exception as e:
+                print(f"Error writing frame for video {self.name}: {e}")
+
+    def _start_writer(self):
+        # Use YYMMDD_HHMMSS format for the file timestamp
+        timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
         
-        # File paths
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = "".join([c if c.isalnum() else "_" for c in self.name])
+        self.rec_start_epoch = None
+        self.rec_start_gst = None
+        # Sanitize name for filename and video use
+        safe_name = self.name.replace(" ", "_")
+
         suffix = f"_{self.stage_name}" if self.stage_name else ""
+        # Format: camera_name_YYMMDD_HHMMSS_stagename
+        filename = f"{safe_name}_{timestamp}{suffix}.mp4"
+        filepath = os.path.join(self.rec_base_dir, filename)
+        self.last_video_name = filename
         
-        video_filename = f"video_{safe_name}_{timestamp}{suffix}.mp4"
-        self.session_video_path = os.path.abspath(os.path.join(self.rec_base_dir, video_filename))
-        
+        # Prepare JSON timestamps file path
         json_filename = f"{safe_name}_{timestamp}{suffix}.json"
         self.json_filepath = os.path.join(self.rec_base_dir, json_filename)
+        self.last_json_path = self.json_filepath
+        self.frame_timestamps = []
         
-        # Encoder
-        plugin, template = self.get_best_encoder()
-        encoder_str = template.format(
+        encoding = self.video_config.get('encoding', {})
+        bitrate = encoding.get('bitrate', 10000)
+        speed_preset = encoding.get('speed_preset', 5)
+        key_int_max = encoding.get('key_int_max', 30)
+        
+        target_width = encoding.get('width', self.width)
+        target_height = encoding.get('height', self.height)
+        
+        # Get best encoder
+        plugin, encoder_template = self.get_best_encoder()
+        
+        # Construct parameters
+        # x264enc/vaapih264enc usually use kbit/sec. NVENC uses bit/sec.
+        # We assume 'bitrate' config is in kbit/sec.
+        bitrate_kb = int(bitrate)
+        bitrate_bits = bitrate_kb * 1000
+        
+        encoder_str = encoder_template.format(
             bitrate_bits=bitrate_bits,
             bitrate_kb=bitrate_kb,
-            speed_preset=int(encoding.get('speed_preset', 5)),
-            key_int_max=int(encoding.get('key_int_max', 30))
+            speed_preset=int(speed_preset),
+            key_int_max=int(key_int_max)
+        )
+
+        # Construct writer video pipeline
+        scale_str = ""
+        if target_width != self.width or target_height != self.height:
+            scale_str = f"videoscale ! video/x-raw,width={int(target_width)},height={int(target_height)} ! "
+
+        writer_video_pipeline = (
+            f"appsrc ! videoconvert ! "
+            f"{scale_str}"
+            f"{encoder_str} ! "
+            f"mp4mux ! filesink location=\"{filepath}\""
         )
         
-        # Watermark
-        now_iso = ""
-        if self.time_watermark:
-            now_iso = datetime.datetime.now().astimezone().isoformat(timespec='milliseconds')
-
-        # Build command manually for subprocess
-        gst_cmd = [
-            "gst-launch-1.0", "-e",
-            source_str,
-            "!", "queue"
-        ]
+        print(f"Start recording video {self.name} to {filepath}")
         
-        if self.time_watermark:
-            gst_cmd.extend(["!", "videobox", "bottom=-30"])
-            gst_cmd.extend(["!", "timeoverlay", "time-mode=buffer-time", "show-times-as-dates=true", 
-                           f"datetime-epoch={now_iso}", "datetime-format=%Y-%m-%d %H:%M:%S.%f", 
-                           "valignment=bottom", "halignment=left", "font-desc=Sans, 10", "ypad=6"])
-
-        gst_cmd.extend(["!", "videoconvert"])
+        # 0 is fourcc for custom video pipeline in some versions, or 'MP4V' etc.
+        # With GStreamer backend, passing 0 usually implies we don't force a codec (video pipeline handles it)
+        # fps must be provided.
+        self.writer = cv2.VideoWriter(writer_video_pipeline, cv2.CAP_GSTREAMER, 0, float(self.fps), (self.width, self.height))
         
-        # Add Encoder and Muxer
-        encoder_parts = encoder_str.split("!")
-        for part in encoder_parts:
-            gst_cmd.append("!")
-            gst_cmd.extend(part.strip().split())
+        if not self.writer.isOpened():
+             print(f"Failed to open VideoWriter for video {self.name}")
+             self.writer = None
+        
+        self.is_recording = True
+
+    def _stop_writer(self):
+        if self.writer:
+            duration = 0.0
+            if len(self.frame_timestamps) > 1:
+                duration = self.frame_timestamps[-1] - self.frame_timestamps[0]
+            print(f"Stop recording video {self.name} (duration: {duration:.2f}s)")
+            self.last_video_duration = duration
+            self.writer.release()
+            self.writer = None
             
-        gst_cmd.extend(["!", "mp4mux", "!", "filesink", f"location={self.session_video_path}"])
-        
-        print(f"Starting recording process for {self.name}...")
-        try:
-            self.record_proc = subprocess.Popen(gst_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.is_recording = True
-            self.frame_timestamps = []
-            self.rec_start_epoch = time.time()
-        except Exception as e:
-            print(f"Failed to start recording process: {e}")
-
-    def _stop_external_recording(self):
-        """Terminate the recording process."""
-        if self.record_proc:
-            print(f"Stopping recording process for {self.name}...")
-            # Send SIGINT (-e in gst-launch handles this for clean MP4 closing)
-            try:
-                self.record_proc.send_signal(signal.SIGINT)
-                self.record_proc.wait(timeout=5)
-            except Exception as e:
-                print(f"Error stopping recording process: {e}")
-                self.record_proc.kill()
+            # Save timestamps to JSON
+            if self.json_filepath and self.frame_timestamps:
+                import json
+                try:
+                    data = {
+                        "name": self.name,
+                        "fps": self.fps,
+                        "video_file": os.path.basename(self.json_filepath).replace(".json", ".mp4"),
+                        "timestamps_ns": self.frame_timestamps
+                    }
+                    with open(self.json_filepath, 'w') as f:
+                        json.dump(data, f, indent=2)
+                    print(f"Saved {len(self.frame_timestamps)} timestamps to {self.json_filepath}")
+                except Exception as e:
+                    print(f"Error saving timestamps for {self.name}: {e}")
+                    print(f"Error saving timestamps for {self.name}: {e}")
             
-            # Store metadata for session index
-            if self.session_video_path:
-                self.last_video_name = os.path.basename(self.session_video_path)
-            self.last_json_path = self.json_filepath
-            if self.frame_timestamps:
-                self.last_video_duration = self.frame_timestamps[-1]['ts'] - self.frame_timestamps[0]['ts']
-            else:
-                self.last_video_duration = 0.0
-
-            self.record_proc = None
-            self.is_recording = False
-            self._save_index_json()
-
-    def _save_index_json(self):
-        if not self.json_filepath or not self.frame_timestamps:
-            return
-        try:
-            data = {
-                'name': self.name,
-                'stream': self.video_config.get('stream'),
-                'width': self.width,
-                'height': self.height,
-                'fps': self.fps_actual,
-                'start_time': self.rec_start_epoch,
-                'num_frames': len(self.frame_timestamps),
-                'session_video': self.session_video_path,
-                'frames': self.frame_timestamps
-            }
-            with open(self.json_filepath, 'w') as f:
-                json.dump(data, f, indent=2)
-            print(f"Saved index data to {self.json_filepath}")
-        except Exception as e:
-            print(f"Error saving index: {e}")
+        self.is_recording = False
+        self.json_filepath = None
+        self.frame_timestamps = []
 
     def stop(self):
         self._run_flag = False
@@ -297,16 +393,7 @@ class VideoThread(QThread):
     def set_recording(self, recording, base_dir, stage_name=None):
         self.rec_base_dir = base_dir
         self.rec_requested = recording
-        self.stage_name = stage_name or ""
-
-    def msleep(self, ms):
-        time.sleep(ms / 1000.0)
-
-    def _stop_gst_recording(self): # Compatibility
-        self._stop_external_recording()
-
-    def _start_gst_recording(self): # Compatibility
-        self._start_external_recording()
+        self.stage_name = stage_name
 
 class AudioLevelMeter(QWidget):
     def __init__(self, parent=None):
@@ -456,11 +543,9 @@ class VideoWidget(QOpenGLWidget):
         painter.end()
 
 class RecordWindow(QMainWindow):
-    def __init__(self, config_files, joy_topic=None, external_node=None):
+    def __init__(self, config_files, joy_topic=None):
         super().__init__()
         self.setWindowTitle("Video Record (OpenCV/GStreamer)")
-        
-        self.ros_node = external_node
         
         # Pre-detect best encoder to avoid delay on first record
         VideoThread.get_best_encoder()
@@ -605,18 +690,10 @@ class RecordWindow(QMainWindow):
     def init_ros(self):
         # We need rclpy.init() to be called. We can do it here or in main.
         # Check if already initialized? 
-        try:
-            if not rclpy.ok():
-                rclpy.init(args=[])
-        except Exception as e:
-            print(f"Failed to initialize rclpy: {e}")
-
-        if not self.ros_node:
-            try:
-                self.ros_node = rclpy.create_node('record')
-            except Exception as e:
-                print(f"Failed to create ROS node: {e}")
-                return
+        if not rclpy.ok():
+            rclpy.init(args=sys.argv)
+            
+        self.ros_node = rclpy.create_node('record')
         
         # Subscriber "record" (Bool)
         self.sub_record = self.ros_node.create_subscription(
@@ -900,10 +977,8 @@ class RecordWindow(QMainWindow):
         return merged_config
 
     def init_videos(self):
-        print("DEBUG: init_videos() started", flush=True)
         cols = 2
         for i, p_config in enumerate(self.config.get('videos', [])):
-            print(f"DEBUG: Processing video {i}: {p_config.get('name')}", flush=True)
             row = i // cols
             col = i % cols
             
@@ -1041,14 +1116,11 @@ class RecordWindow(QMainWindow):
                         try:
                             with open(th.last_json_path, 'r') as f:
                                 v_data = json.load(f)
-                                # Check for new format (frames list with 'ts')
-                                if "frames" in v_data and len(v_data["frames"]) > 1:
-                                    v_duration = v_data["frames"][-1]["ts"] - v_data["frames"][0]["ts"]
-                                # Check for old format (timestamps_ns)
-                                elif "timestamps_ns" in v_data and len(v_data["timestamps_ns"]) > 1:
-                                    v_duration = (v_data["timestamps_ns"][-1] - v_data["timestamps_ns"][0]) / 1e9
+                                ts_ns = v_data.get("timestamps_ns", [])
+                                if len(ts_ns) > 1:
+                                    v_duration = (ts_ns[-1] - ts_ns[0]) / 1e9
                                 else:
-                                    v_duration = th.last_video_duration
+                                    v_duration = 0.0
                         except Exception as e:
                             print(f"Error computing duration for {th.last_video_name}: {e}")
                             v_duration = th.last_video_duration # Fallback
@@ -1269,15 +1341,6 @@ class RecordWindow(QMainWindow):
         event.accept()
 
 def main():
-    print("DEBUG: main() started. Creating global node...", flush=True)
-    try:
-        # Create node after all imports but before Qt
-        global_ros_node = rclpy.create_node('video_recorder_node')
-        print("DEBUG: Global ROS node created.", flush=True)
-    except Exception as e:
-        print(f"CRITICAL: ROS2 node creation failed: {e}", flush=True)
-        global_ros_node = None
-
     parser = argparse.ArgumentParser(description="Video Record")
     parser.add_argument("-c", "--config", help="Path to JSON configuration file", action="append", required=True)
     parser.add_argument("-p", "--joy-topic", help="ROS Joy topic for recording control (button 0)", default=None)
@@ -1295,18 +1358,14 @@ def main():
     signal_timer.timeout.connect(lambda: None)
     signal_timer.start(100)
     
-    window = None
-
     def handle_sigint(sig, frame):
         print("\nInterrupt received, shutting down...")
-        if window:
-            window.close() # This will trigger closeEvent and its cleanup
-        app.quit()
+        window.close() # This will trigger closeEvent and its cleanup
         app.quit()
         
     signal.signal(signal.SIGINT, handle_sigint)
     
-    window = RecordWindow(config_files, joy_topic=args.joy_topic, external_node=global_ros_node)
+    window = RecordWindow(config_files, joy_topic=args.joy_topic)
     window.resize(800, 600)
     window.show()
     sys.exit(app.exec_())
