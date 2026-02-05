@@ -251,11 +251,20 @@ void TagWindow::load_sidecar_json() {
 void TagWindow::setup_pipeline() {
     load_sidecar_json();
 
-    std::string pipe_str = "filesrc location=\"" + m_data.video_path + "\" ! decodebin ! videoconvert ! gtksink name=vsink sync=true";
+    // Use an explicit software decode chain to avoid NVMM/NVV4L2 negotiation issues during playback.
+    // Assumes MP4/H.264 recording output from the recorder: filesrc -> qtdemux -> h264parse -> avdec_h264.
+    std::string pipe_str =
+        "filesrc location=\"" + m_data.video_path +
+        "\" ! qtdemux name=demux "
+        "demux.video_0 ! queue ! h264parse ! avdec_h264 ! videoconvert ! gtksink name=vsink sync=true";
     GError* err = nullptr;
     m_data.pipeline = gst_parse_launch(pipe_str.c_str(), &err);
     if (!m_data.pipeline) {
         std::cerr << "Failed to create pipeline: " << (err ? err->message : "unknown") << std::endl;
+        if (err) {
+            std::cerr << "GStreamer error: " << err->message << std::endl;
+            g_error_free(err);
+        }
         return;
     }
 
@@ -406,6 +415,14 @@ void TagWindow::on_tag_jump(const std::string& tag_name) {
     long long frame = std::stoll(id);
     m_data.current_frame = frame; // Update state immediately to prevent sync lag
     do_seek(frame_to_ns(frame));
+    
+    // Pause video after seeking to tag
+    GstState current, pending;
+    if (m_data.pipeline && gst_element_get_state(m_data.pipeline, &current, &pending, 0) == GST_STATE_CHANGE_SUCCESS) {
+        if (current == GST_STATE_PLAYING) {
+            on_play_pause();
+        }
+    }
 }
 
 void TagWindow::update_tag_navigation_ui() {
