@@ -1,6 +1,7 @@
 
 #include "pipeline.hpp"
 #include <iostream>
+#include <algorithm>
 #include <gtk/gtk.h>
 #include <cairo.h>
 
@@ -15,10 +16,18 @@ void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, gu
     }
 
     if (s->is_recording) {
+        // Scale text relative to a 640x480 baseline so it remains readable on larger frames.
+        double base_size = 24.0;
+        double scale = 1.0;
+        if (s->width > 0 && s->height > 0) {
+            scale = std::min(s->width / 640.0, s->height / 480.0);
+            scale = std::max(0.5, std::min(scale, 4.0));
+        }
+
         cairo_set_source_rgb(cr, 1.0, 0.0, 0.0); // Red
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-        cairo_set_font_size(cr, 24);
-        cairo_move_to(cr, 20, 40);
+        cairo_set_font_size(cr, base_size * scale);
+        cairo_move_to(cr, 20 * scale, 40 * scale);
         cairo_show_text(cr, "REC");
     }
 }
@@ -36,7 +45,15 @@ std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
             std::string name(c);
             std::cout << "Selected H264 Encoder: " << name << std::endl;
             if (name == "nvh264enc") return "nvh264enc bitrate=" + std::to_string(br) + " zerolatency=true";
-            if (name == "nvv4l2h264enc") return "nvv4l2h264enc bitrate=" + std::to_string(br) + " preset-level=4 control-rate=1";
+            if (name == "nvv4l2h264enc") {
+                GstElementFactory* conv = gst_element_factory_find("nvvidconv");
+                if (conv) {
+                    gst_object_unref(conv);
+                    return "nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! nvv4l2h264enc bitrate=" + std::to_string(br) + " control-rate=1";
+                } else {
+                    std::cout << "nvvidconv not found; skipping nvv4l2h264enc" << std::endl;
+                }
+            }
             if (name == "vaapih264enc") return "vaapih264enc bitrate=" + std::to_string(br);
             if (name == "x264enc") return "x264enc bitrate=" + std::to_string(br) + " speed-preset=" + std::to_string(preset) + " tune=zerolatency key-int-max=" + std::to_string(keyint) + " threads=" + std::to_string(app_max_threads);
         }
@@ -327,18 +344,18 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
                      " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true shading-value=255 xpad=0 ypad=0 ";
     }
 
-    std::string pstr = v.stream + " do-timestamp=true ! " + caps + ts_overlay + " ! tee name=t "
-        "t. ! queue max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=rec_overlay ! gtksink name=sink sync=false async=false ";
+    std::string pstr = v.stream + " ! " + caps + ts_overlay + " ! tee name=__rec_t__ "
+        "__rec_t__. ! queue name=__prev_q__ max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=__prev_overlay__ ! gtksink name=__prev_sink__ sync=false async=false ";
     
     if (s->record_enabled) {
-        pstr += "t. ! queue name=qrec max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=v drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! " + get_best_encoder(v.encoding) + " ! queue max-size-buffers=1 leaky=downstream ! h264parse ! mp4mux ! filesink name=muxer sync=false async=false";
+        pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! video/x-raw,format=NV12 ! " + get_best_encoder(v.encoding) + " ! queue name=__rec_q_enc__ max-size-buffers=1 leaky=downstream ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
     }
 
     s->pipeline_desc = pstr;
     s->pipeline = gst_parse_launch(pstr.c_str(), NULL);
     if (!s->pipeline) { delete s; return NULL; }
 
-    GstElement *tee = gst_bin_get_by_name(GST_BIN(s->pipeline), "t");
+    GstElement *tee = gst_bin_get_by_name(GST_BIN(s->pipeline), "__rec_t__");
     if (tee) {
         GstPad *tpad = gst_element_get_static_pad(tee, "sink");
         gst_pad_add_probe(tpad, GST_PAD_PROBE_TYPE_BUFFER, source_probe_cb, s, NULL);
@@ -346,7 +363,7 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
         gst_object_unref(tee);
     }
 
-    GstElement *qrec = gst_bin_get_by_name(GST_BIN(s->pipeline), "qrec");
+    GstElement *qrec = gst_bin_get_by_name(GST_BIN(s->pipeline), "__rec_q_rec__");
     if (qrec) {
         g_signal_connect(qrec, "overrun", G_CALLBACK(+[](GstElement* q, gpointer d){
             (void)q;
@@ -358,11 +375,11 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
     std::string sn = s->name; for (char &c : sn) if (c == ' ') c = '_';
     s->output_video = data->session_dir + "/" + sn + "_" + data->start_timestamp + ".mp4";
     s->output_json = data->session_dir + "/" + sn + "_" + data->start_timestamp + ".json";
-    GstElement *mux = gst_bin_get_by_name(GST_BIN(s->pipeline), "muxer");
-    if (mux) { g_object_set(mux, "location", s->output_video.c_str(), NULL); gst_object_unref(mux); }
+    GstElement *fsink = gst_bin_get_by_name(GST_BIN(s->pipeline), "__rec_filesink__");
+    if (fsink) { g_object_set(fsink, "location", s->output_video.c_str(), NULL); gst_object_unref(fsink); }
 
-    s->valve = gst_bin_get_by_name(GST_BIN(s->pipeline), "v");
-    s->rec_overlay = gst_bin_get_by_name(GST_BIN(s->pipeline), "rec_overlay");
+    s->valve = gst_bin_get_by_name(GST_BIN(s->pipeline), "__rec_v__");
+    s->rec_overlay = gst_bin_get_by_name(GST_BIN(s->pipeline), "__prev_overlay__");
     if (s->rec_overlay) {
         g_signal_connect(s->rec_overlay, "draw", G_CALLBACK(on_rec_overlay_draw), s);
         gst_object_unref(s->rec_overlay); 
@@ -394,7 +411,7 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
         // Previous line: s->rec_text = gst_bin_get_by_name(...);
     }
     
-    GstElement *sink = gst_bin_get_by_name(GST_BIN(s->pipeline), "sink");
+    GstElement *sink = gst_bin_get_by_name(GST_BIN(s->pipeline), "__prev_sink__");
     g_object_get(sink, "widget", &s->preview_widget, NULL);
     gtk_widget_set_size_request(s->preview_widget, 320, 240);
     GstPad *vpad = gst_element_get_static_pad(s->valve, "src");
