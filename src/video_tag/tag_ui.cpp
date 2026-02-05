@@ -103,7 +103,7 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
     Gtk::Label* tags_title = Gtk::make_managed<Gtk::Label>();
     tags_title->set_markup("<b>Tags</b>");
     m_right_vbox.pack_start(*tags_title, Gtk::PACK_SHRINK);
-    
+
     m_tags_scroll.set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
     m_tags_grid.set_column_spacing(10);
     m_tags_grid.set_row_spacing(5);
@@ -143,10 +143,10 @@ TagWindow::~TagWindow() {
 
 void TagWindow::load_config(const std::string& path) {
     if (path.empty()) return;
-    
+
     Json::Value root;
     if (!dc::Config::load_from_file(path, root)) return;
-    
+
     dc::AppConfig cfg = dc::Config::parse_app_config(root);
 
     auto add_row = [this](const std::string& tag_name){
@@ -201,23 +201,23 @@ void TagWindow::load_sidecar_json() {
     if (root.isMember("frames") && root["frames"].isArray()) {
         m_data.frame_cpu_timestamps.clear();
         m_data.frame_gst_timestamps.clear();
-        
+
         long long first_gst_ts = -1;
-        
+
         for (const auto& frame : root["frames"]) {
             if (frame.isMember("cpu_ts")) {
                 m_data.frame_cpu_timestamps.push_back(frame["cpu_ts"].asInt64());
             } else {
                 m_data.frame_cpu_timestamps.push_back(0);
             }
-            
+
             long long t = 0;
             if (frame.isMember("gst_ts")) {
                 t = frame["gst_ts"].asInt64();
             }
-            
+
             if (first_gst_ts == -1) first_gst_ts = t;
-            
+
             m_data.frame_gst_timestamps.push_back(t - first_gst_ts);
         }
     }
@@ -269,7 +269,7 @@ void TagWindow::setup_pipeline() {
     }
 
     m_data.video_sink = gst_bin_get_by_name(GST_BIN(m_data.pipeline), "vsink");
-    
+
     // Get gtksink widget and pack it
     GtkWidget* sink_widget = nullptr;
     g_object_get(m_data.video_sink, "widget", &sink_widget, NULL);
@@ -280,11 +280,11 @@ void TagWindow::setup_pipeline() {
     }
 
     gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
-    
+
     // Get duration and FPS
     GstState state = GST_STATE_PAUSED;
     gst_element_get_state(m_data.pipeline, &state, nullptr, GST_SECOND);
-    
+
     gint64 duration = 0;
     if (gst_element_query_duration(m_data.pipeline, GST_FORMAT_TIME, &duration)) {
         m_data.duration_ns = duration;
@@ -302,7 +302,7 @@ void TagWindow::setup_pipeline() {
         if (gst_structure_get_fraction(s, "framerate", &num, &den) && den != 0) {
             m_data.fps = (double)num / (double)den;
         }
-        
+
         gint width, height;
         if (gst_structure_get_int(s, "width", &width) && gst_structure_get_int(s, "height", &height)) {
              std::stringstream ss;
@@ -324,9 +324,9 @@ void TagWindow::setup_pipeline() {
 void TagWindow::do_seek(gint64 ns) {
     if (!m_data.pipeline) return;
     double speed = std::stod(m_speed_combo.get_active_id());
-    gst_element_seek(m_data.pipeline, speed, GST_FORMAT_TIME, 
+    gst_element_seek(m_data.pipeline, speed, GST_FORMAT_TIME,
                      (GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
-                     GST_SEEK_TYPE_SET, ns, 
+                     GST_SEEK_TYPE_SET, ns,
                      GST_SEEK_TYPE_NONE, -1);
 }
 
@@ -387,10 +387,10 @@ void TagWindow::on_speed_changed() {
 
 void TagWindow::on_tag_toggle(const std::string& tag_name) {
     if (m_internal_update || m_data.total_frames == 0) return;
-    
+
     auto& tags_at_frame = m_data.frame_tags[m_data.current_frame];
     auto it = std::find(tags_at_frame.begin(), tags_at_frame.end(), tag_name);
-    
+
     if (m_tag_buttons[tag_name]->get_active()) {
         if (it == tags_at_frame.end()) {
             tags_at_frame.push_back(tag_name);
@@ -415,7 +415,7 @@ void TagWindow::on_tag_jump(const std::string& tag_name) {
     long long frame = std::stoll(id);
     m_data.current_frame = frame; // Update state immediately to prevent sync lag
     do_seek(frame_to_ns(frame));
-    
+
     // Pause video after seeking to tag
     GstState current, pending;
     if (m_data.pipeline && gst_element_get_state(m_data.pipeline, &current, &pending, 0) == GST_STATE_CHANGE_SUCCESS) {
@@ -427,7 +427,7 @@ void TagWindow::on_tag_jump(const std::string& tag_name) {
 
 void TagWindow::update_tag_navigation_ui() {
     m_internal_update = true;
-    
+
     // Calculate counts and frames for each tag
     std::map<std::string, std::vector<long long>> tag_occurences;
     for (auto const& [frame, tags] : m_data.frame_tags) {
@@ -480,7 +480,7 @@ bool TagWindow::on_ui_update_timer() {
     gint64 pos = 0;
     if (gst_element_query_position(m_data.pipeline, GST_FORMAT_TIME, &pos)) {
         m_internal_update = true;
-        
+
         long long frame = 0;
         if (!m_data.frame_gst_timestamps.empty()) {
             auto it = std::lower_bound(m_data.frame_gst_timestamps.begin(), m_data.frame_gst_timestamps.end(), pos);
@@ -503,12 +503,12 @@ bool TagWindow::on_ui_update_timer() {
 
         m_duration_label.set_text(format_time(session_rel_ns) + " / " + format_time(m_data.session_duration_ns));
         m_timeline_slider.set_value((double)pos / 1e6);
-        
+
         if (frame != m_data.current_frame || true) { // Always refresh display labels to ensure consistency
             m_data.current_frame = frame;
             m_frame_slider.set_value(frame);
             m_frame_label.set_text(std::to_string(frame) + " / " + std::to_string(m_data.total_frames));
-            
+
             // Update tag buttons state for this frame
             for (auto const& [name, btn] : m_tag_buttons) {
                 auto const& tags = m_data.frame_tags[frame];
@@ -538,7 +538,7 @@ std::string TagWindow::format_time(long long ns) {
     int m = (total_sec % 3600) / 60;
     int s = total_sec % 60;
     std::stringstream ss;
-    ss << std::setfill('0') << std::setw(2) << h << ":" 
+    ss << std::setfill('0') << std::setw(2) << h << ":"
        << std::setw(2) << m << ":" << std::setw(2) << s;
     return ss.str();
 }
@@ -595,10 +595,10 @@ void TagWindow::save_tags() {
             // Ensure chronological order for start/end
             long long s_frame = std::min(stage.start, stage.end);
             long long e_frame = std::max(stage.start, stage.end);
-            
+
             if (stage.start > stage.end) {
-                std::string error_msg = "Warning: Stage '" + name + "' has start > end! (" + 
-                                       format_time_simple((double)stage.start / m_data.fps) + " > " + 
+                std::string error_msg = "Warning: Stage '" + name + "' has start > end! (" +
+                                       format_time_simple((double)stage.start / m_data.fps) + " > " +
                                        format_time_simple((double)stage.end / m_data.fps) + ")";
                 std::cerr << error_msg << std::endl;
                 m_info_label.set_text(error_msg);
@@ -651,7 +651,7 @@ void TagWindow::load_tags(const std::string& explicit_path) {
         auto it = std::lower_bound(m_data.frame_cpu_timestamps.begin(), m_data.frame_cpu_timestamps.end(), ts);
         if (it == m_data.frame_cpu_timestamps.end()) return m_data.frame_cpu_timestamps.size() - 1;
         if (it == m_data.frame_cpu_timestamps.begin()) return 0;
-        
+
         long long dist1 = std::abs((long long)*it - ts);
         long long dist2 = std::abs((long long)*(it - 1) - ts);
         if (dist1 < dist2) return std::distance(m_data.frame_cpu_timestamps.begin(), it);
@@ -700,7 +700,7 @@ void TagWindow::load_session_tags() {
     auto find_frame = [&](long long ts) -> long long {
         if (m_data.frame_cpu_timestamps.empty()) return -1;
         auto it = std::lower_bound(m_data.frame_cpu_timestamps.begin(), m_data.frame_cpu_timestamps.end(), ts);
-        
+
         long long idx = -1;
         if (it == m_data.frame_cpu_timestamps.end()) {
             idx = m_data.frame_cpu_timestamps.size() - 1;
@@ -726,7 +726,7 @@ void TagWindow::load_session_tags() {
     if (root.isMember("stages")) {
         for (auto& s : root["stages"]) {
             std::string name = s["name"].asString();
-            
+
             long long start_frame = find_frame(s["start"].asInt64());
             long long end_frame = find_frame(s["end"].asInt64());
             if (start_frame != -1) {

@@ -31,7 +31,7 @@ std::vector<VideoConfig> Config::parse_videos(const Json::Value& root) {
         if (v.isMember("stream")) cfg.stream = v["stream"].asString();
         if (v.isMember("record")) cfg.record = v["record"].asBool();
         if (v.isMember("timestamp_overlay")) cfg.timestamp_overlay = v["timestamp_overlay"].asBool();
-        
+
         if (v.isMember("encoding")) {
             const auto& enc = v["encoding"];
             if (enc.isMember("width")) cfg.encoding.width = enc["width"].asInt();
@@ -69,7 +69,7 @@ AppConfig Config::parse_app_config(const Json::Value& root) {
 std::string Config::make_caps_string(const VideoEncoding& enc) {
     std::string caps = "video/x-raw";
     if (enc.width > 0 && enc.height > 0) {
-        caps += ",width=" + std::to_string(enc.width) + 
+        caps += ",width=" + std::to_string(enc.width) +
                 ",height=" + std::to_string(enc.height);
     }
     if (enc.frame_rate > 0) {

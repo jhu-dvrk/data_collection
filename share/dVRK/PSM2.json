@@ -1,5 +1,5 @@
 {
-  "ros_topics": [ 
+  "ros_topics": [
     "/PSM2/measured_cp",
     "/PSM2/measured_cv",
     "/PSM2/setpoint_cp",

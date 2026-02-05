@@ -13,26 +13,26 @@ struct TagData {
     std::string config_path;
     std::vector<std::string> stages;
     std::vector<std::string> tags;
-    
+
     // frame_num -> list of tags
     std::map<long long, std::vector<std::string>> frame_tags;
-    
+
     // Mapping from frame index to CPU timestamp
     std::vector<long long> frame_cpu_timestamps;
     std::vector<long long> frame_gst_timestamps;
-    
+
     bool unsaved_changes = false;
-    
+
     long long current_frame = 0;
     long long total_frames = 0;
     long long duration_ns = 0;
     long long session_start_cpu_ns = 0;
     long long session_duration_ns = 0;
     double fps = 30.0;
-    
+
     GstElement *pipeline = nullptr;
     GstElement *video_sink = nullptr;
-    
+
     TagData() = default;
 };
 
@@ -53,7 +53,7 @@ protected:
     void on_save();
     void on_tag_toggle(const std::string& tag_name);
     void on_tag_jump(const std::string& tag_name);
-    
+
     bool on_ui_update_timer();
     bool on_key_press(GdkEventKey* event);
 
@@ -79,33 +79,33 @@ protected:
     Gtk::Box m_main_hbox;
     Gtk::Box m_left_vbox;
     Gtk::Box m_right_vbox;
-    
+
     Gtk::Box m_video_container; // Container for GstGtkSink widget
     Gtk::Label m_info_label;
     Gtk::Label m_stats_label;
-    
+
     Gtk::Box m_timeline_hbox;
     Gtk::Label m_time_label;
     Gtk::Scale m_timeline_slider;
     Gtk::Label m_duration_label;
-    
+
     Gtk::Box m_frame_hbox;
     Gtk::Scale m_frame_slider;
     Gtk::Label m_frame_label;
-    
+
     Gtk::Box m_controls_hbox;
     Gtk::Button m_prev_btn;
     Gtk::Button m_play_btn;
     Gtk::Button m_next_btn;
     Gtk::Button m_begin_btn;
     Gtk::ComboBoxText m_speed_combo;
-    
+
     Gtk::ScrolledWindow m_tags_scroll;
     Gtk::Grid m_tags_grid;
     Gtk::Box m_save_quit_hbox;
     Gtk::Button m_save_btn;
     Gtk::Button m_quit_btn;
-    
+
     // Track tag widgets: tag_name -> widget pointer (checkbox/toggle)
     std::map<std::string, Gtk::ToggleButton*> m_tag_buttons;
     std::map<std::string, Gtk::Label*> m_tag_count_labels;

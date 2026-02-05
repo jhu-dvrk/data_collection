@@ -18,7 +18,7 @@ The application also integrates with ROS2 for remote control and status monitori
 
 ## NVIDIA Hardware Acceleration
 
-To use NVIDIA GPUs for hardware-accelerated video encoding (NVENC), you need to have the NVIDIA drivers and the GStreamer `nvcodec` plugin installed. This is often provided by the NVIDIA DeepStream SDK.  https://catalog.ngc.nvidia.com/orgs/nvidia/resources/deepstream?version=8.0 
+To use NVIDIA GPUs for hardware-accelerated video encoding (NVENC), you need to have the NVIDIA drivers and the GStreamer `nvcodec` plugin installed. This is often provided by the NVIDIA DeepStream SDK.  https://catalog.ngc.nvidia.com/orgs/nvidia/resources/deepstream?version=8.0
 
 ```bash
 sudo apt update
@@ -59,7 +59,7 @@ Define your video sources in a JSON file. The configuration format is defined in
 {
   "data_directory": "data",
   "record_audio": true,
-  "ros_topics": [ 
+  "ros_topics": [
     "/PSM1/measured_cp",
     "/PSM1/measured_cv",
     "/PSM1/jaw/measured_js"

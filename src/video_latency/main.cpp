@@ -18,7 +18,7 @@
 
 class LatencyWindow : public Gtk::Window {
 public:
-    LatencyWindow(const std::string& config_path) 
+    LatencyWindow(const std::string& config_path)
         : m_vbox(Gtk::ORIENTATION_VERTICAL, 5),
           m_measuring(false),
           m_baseline(0.0),
@@ -27,7 +27,7 @@ public:
     {
         set_title("Latency Estimation Tool");
         set_default_size(800, 600);
-        
+
         set_border_width(10);
         add(m_vbox);
 
@@ -52,7 +52,7 @@ public:
         m_flash_layer.set_vexpand(true);
         m_flash_layer.set_halign(Gtk::ALIGN_FILL);
         m_flash_layer.set_valign(Gtk::ALIGN_FILL);
-        
+
         // Draw black when visible
         m_flash_layer.signal_draw().connect([this](const Cairo::RefPtr<Cairo::Context>& cr){
             cr->set_source_rgb(0.0, 0.0, 0.0);
@@ -62,7 +62,7 @@ public:
 
         m_overlay.add_overlay(m_flash_layer);
         m_flash_layer.set_no_show_all(true); // Don't show by default
-        m_flash_layer.hide(); 
+        m_flash_layer.hide();
 
         // Bottom Controls
         Gtk::Box* hbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, 5));
@@ -71,7 +71,7 @@ public:
         m_btn_estimate.set_label("Estimate Latency");
         m_btn_estimate.signal_clicked().connect(sigc::mem_fun(*this, &LatencyWindow::on_estimate_latency));
         hbox->pack_start(m_btn_estimate, Gtk::PACK_SHRINK);
-        
+
         m_lbl_result.set_text("Result: N/A");
         hbox->pack_start(m_lbl_result, Gtk::PACK_SHRINK);
 
@@ -100,7 +100,7 @@ protected:
     Gtk::Button m_btn_estimate;
     Gtk::Label m_lbl_result;
     Gtk::Label m_lbl_level;
-    
+
     GstElement* m_pipeline = nullptr;
     GstElement* m_sink = nullptr;
 
@@ -110,19 +110,19 @@ protected:
     std::chrono::steady_clock::time_point m_start_time;
     double m_baseline;
     double m_latched_baseline;
-    
+
     // Multi-sample State
     int m_samples_collected;
     int m_target_samples;
     std::vector<double> m_latencies;
-    
+
     // Dispatcher for UI updates from thread
     std::string m_ui_result_text;
 
     void on_estimate_latency() {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         if (m_measuring) return; // Already running
-        
+
         if (m_baseline < 10.0) {
             m_lbl_result.set_text("Error: Baseline too low (Camera dark?)");
             return;
@@ -131,22 +131,22 @@ protected:
         m_latencies.clear();
         m_samples_collected = 0;
         m_latched_baseline = m_baseline; // Freeze baseline for the sequence
-        
+
         start_single_measurement();
     }
 
     void start_single_measurement() {
-        // MUST be called with m_state_mutex LOCKED or from UI thread safely? 
+        // MUST be called with m_state_mutex LOCKED or from UI thread safely?
         // This is called initially from UI thread, and then from idle callback (UI thread)
         // so we need to lock just to set shared state.
-        
+
         m_measuring = true;
         m_start_time = std::chrono::steady_clock::now();
         m_flash_layer.show();
         m_flash_layer.queue_draw(); // Force redraw
-        
+
         m_lbl_result.set_text("Measuring sample " + std::to_string(m_samples_collected + 1) + "/" + std::to_string(m_target_samples) + "...");
-        
+
         // Timeout for failed detection (1.0 second)
         Glib::signal_timeout().connect_once([this]() {
             std::lock_guard<std::mutex> lock(m_state_mutex);
@@ -154,24 +154,24 @@ protected:
                 // Timeout logic
                 m_measuring = false;
                 std::cerr << "Sample " << (m_samples_collected + 1) << " timed out." << std::endl;
-                
-                // Do NOT increment m_samples_collected, retrying this sample? 
+
+                // Do NOT increment m_samples_collected, retrying this sample?
                 // Or just ignore it? The user said "remove from statistics", which implies ignoring.
                 // But we probably want to continue the sequence or abort?
-                // Let's retry the sample or just skip? 
+                // Let's retry the sample or just skip?
                 // "Remove that sample from statistics" usually means just don't count it.
                 // But we still need to reach target?
                 // I'll skip it but keep going to target count.
                 // Wait, if I don't increment collected, we might loop forever if camera is blocked.
                 // Let's increment but NOT add to m_latencies.
                 // Or even better: Retry logic? No, simplistic approach: Skip sample.
-                
+
                 // If we skip, we have fewer samples at the end.
                 // User asked "sequence of ten", so let's try to get 10 VALID samples.
                 // But avoid infinite loop. Let's abort this sample, hide flash, and schedule next attempt.
-                
+
                 m_flash_layer.hide();
-                
+
                 // Schedule next attempt
                 Glib::signal_timeout().connect_once([this]() {
                      std::lock_guard<std::mutex> lock(m_state_mutex);
@@ -188,7 +188,7 @@ protected:
         if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
             uint64_t sum = 0;
             // Simple robust sampling: sum every 64th byte
-            int step = 64; 
+            int step = 64;
             if (map.size > 0) {
                 for (size_t i = 0; i < map.size; i += step) {
                     sum += map.data[i];
@@ -196,13 +196,13 @@ protected:
                 double avg = (double)sum / (double)((map.size + step - 1) / step);
 
                 std::lock_guard<std::mutex> lock(m_state_mutex);
-                
+
                 // Detection logic
                 if (m_measuring) {
                     if (avg < m_latched_baseline * 0.5) {
                         auto t1 = std::chrono::steady_clock::now();
                         double latency_ms = std::chrono::duration<double, std::milli>(t1 - m_start_time).count();
-                        
+
                         m_measuring = false;
                         m_latencies.push_back(latency_ms);
                         m_samples_collected++;
@@ -211,12 +211,12 @@ protected:
                         if (m_samples_collected < m_target_samples) {
                              Glib::signal_idle().connect_once([this](){
                                 m_flash_layer.hide(); // Hide first to reset
-                                
+
                                 // Wait a bit before next flash (e.g., 1.5s) to allow avg to stabilize and user to see the flash
                                 Glib::signal_timeout().connect_once([this]() {
                                     std::lock_guard<std::mutex> lock(m_state_mutex);
                                     start_single_measurement();
-                                }, 1500); 
+                                }, 1500);
                             });
                         } else {
                             // All done
@@ -227,7 +227,7 @@ protected:
                             double stdev = std::sqrt(sq_sum / m_latencies.size() - mean * mean);
 
                             std::stringstream ss;
-                            ss << "Avg: " << std::fixed << std::setprecision(1) << mean 
+                            ss << "Avg: " << std::fixed << std::setprecision(1) << mean
                                << "ms | StdDev: " << stdev << "ms (" << m_latencies.size() << ")";
                             m_ui_result_text = ss.str();
 
@@ -244,7 +244,7 @@ protected:
                     }
                 }
 
-                // Throttle UI updates or just raw? 
+                // Throttle UI updates or just raw?
                 // Updating every frame (30/60fps) is fine for a label
                 Glib::signal_idle().connect_once([this, avg](){
                      m_lbl_level.set_text("Level: " + std::to_string((int)avg));

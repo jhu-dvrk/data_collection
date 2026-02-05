@@ -38,15 +38,15 @@ MainWindow::MainWindow(AppData* data)
     set_title("Data Collection Recorder");
     set_default_size(1024, 768);
     set_border_width(WINDOW_BORDER_PX);
-    
+
     // Sync AppData pointer for legacy C callbacks
     m_data->window = (GtkWidget*)this->gobj();
 
     add(m_main_vbox);
-    
+
     // Top section: Left (Session/Audio/Streams) - Right (Stages)
     m_main_vbox.pack_start(m_top_hbox, Gtk::PACK_EXPAND_WIDGET);
-    
+
     // Left side container
     Gtk::Box *f1a_vbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, BOX_SPACING_PX));
     m_top_hbox.pack_start(*f1a_vbox, Gtk::PACK_EXPAND_WIDGET);
@@ -64,16 +64,16 @@ MainWindow::MainWindow(AppData* data)
     Gtk::Box* dir_hbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
     m_session_vbox.pack_start(*dir_hbox, Gtk::PACK_SHRINK);
     dir_hbox->pack_start(*Gtk::manage(new Gtk::Label("Directory:")), Gtk::PACK_SHRINK);
-    
+
     m_data_dir_entry.set_text(m_data->data_directory);
     m_data_dir_entry.set_sensitive(false);
     dir_hbox->pack_start(m_data_dir_entry, Gtk::PACK_EXPAND_WIDGET);
-    
+
     // Current Session Name
     Gtk::Box* sess_hbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
     m_session_vbox.pack_start(*sess_hbox, Gtk::PACK_SHRINK);
     sess_hbox->pack_start(*Gtk::manage(new Gtk::Label("Name:")), Gtk::PACK_SHRINK);
-    
+
     m_session_entry.set_text(m_data->session_dir);
     m_session_entry.set_sensitive(false);
     sess_hbox->pack_start(m_session_entry, Gtk::PACK_EXPAND_WIDGET);
@@ -116,7 +116,7 @@ MainWindow::MainWindow(AppData* data)
         m_bag_frame.add(m_bag_vbox);
         m_bag_vbox.set_border_width(FRAME_PADDING_PX);
         f1a_vbox->pack_start(m_bag_frame, Gtk::PACK_SHRINK);
-        
+
         Gtk::Box* stats_box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
         m_bag_vbox.pack_start(*stats_box, Gtk::PACK_SHRINK);
 
@@ -128,7 +128,7 @@ MainWindow::MainWindow(AppData* data)
         m_bag_details_button.set_tooltip_text("Show Topic Details");
         m_bag_details_button.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_bag_details_clicked));
         stats_box->pack_start(m_bag_details_button, Gtk::PACK_SHRINK);
-        
+
         m_data->bag_stats_label = (GtkWidget*)m_bag_stats_label.gobj();
     }
 
@@ -161,7 +161,7 @@ MainWindow::MainWindow(AppData* data)
         m_stages_frame.set_label_widget(*stages_lbl);
         m_stages_frame.add(m_stages_vbox);
         m_stages_vbox.set_border_width(FRAME_PADDING_PX);
-        right_side_vbox->pack_start(m_stages_frame, Gtk::PACK_SHRINK); 
+        right_side_vbox->pack_start(m_stages_frame, Gtk::PACK_SHRINK);
 
         for (size_t i = 0; i < m_data->config_stages.size(); ++i) {
             Gtk::EventBox* eb = Gtk::manage(new Gtk::EventBox());
@@ -170,7 +170,7 @@ MainWindow::MainWindow(AppData* data)
             eb->add(*lbl);
             m_stages_vbox.pack_start(*eb, Gtk::PACK_SHRINK);
             m_stage_labels.push_back(lbl);
-            
+
             // Legacy sync
             m_data->stage_labels.push_back((GtkWidget*)lbl->gobj());
 
@@ -206,19 +206,19 @@ MainWindow::MainWindow(AppData* data)
 
     // --- Bottom Controls ---
     m_main_vbox.pack_end(m_bottom_hbox, Gtk::PACK_SHRINK);
-    
+
     m_record_button.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_record_toggle));
     m_bottom_hbox.pack_start(m_record_button, Gtk::PACK_EXPAND_WIDGET);
-    
+
     m_quit_button.signal_clicked().connect(sigc::mem_fun(*this, &Gtk::Window::close));
     m_bottom_hbox.pack_end(m_quit_button, Gtk::PACK_SHRINK);
 
     m_data->record_button = (GtkWidget*)m_record_button.gobj();
 
     show_all_children();
-    
+
     m_update_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &MainWindow::on_ui_update), 33);
-    
+
     g_main_window_instance = this;
 }
 
@@ -239,7 +239,7 @@ MainWindow::~MainWindow() {
         }
         gst_element_set_state(pipeline, GST_STATE_NULL);
     };
-    
+
     // Force stop recording logic manual override (since toggle checks is_quitting)
     // Actually, we just need to ensure valves are open and files are written.
     if (m_data->global_recording) {
@@ -263,7 +263,7 @@ MainWindow::~MainWindow() {
         Json::Value configFiles(Json::arrayValue);
         for (const auto& f : m_data->config_files) configFiles.append(f);
         root["config_files"] = configFiles;
-        
+
         Json::Value framesArr(Json::arrayValue);
         for (const auto& f : m_data->audio_frames) {
             Json::Value frameNode;
@@ -272,7 +272,7 @@ MainWindow::~MainWindow() {
             framesArr.append(frameNode);
         }
         root["frames"] = framesArr;
-        
+
         std::ofstream os(m_data->audio_output_json); Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
     }
@@ -285,7 +285,7 @@ MainWindow::~MainWindow() {
 
             // Save session tags to a global file if we haven't already
             // Actually, we should save it once in index.json or tags.json
-            
+
             Json::Value configFiles(Json::arrayValue);
             for (const auto& f : m_data->config_files) configFiles.append(f);
             root["config_files"] = configFiles;
@@ -293,7 +293,7 @@ MainWindow::~MainWindow() {
             if (!m_data->session_event_tags.empty() || !m_data->session_stages.empty() || m_data->recording_start_cpu_ts > 0) {
                 root["session_tags_file"] = "tags.json";
             }
-            
+
             Json::Value framesArr(Json::arrayValue);
             for (const auto& f : s->frames) {
                 Json::Value frameNode;
@@ -313,19 +313,19 @@ MainWindow::~MainWindow() {
     if (!m_data->streams.empty() || !m_data->audio_frames.empty()) {
         Json::Value indexRoot;
         Json::Value videosArr(Json::arrayValue);
-        
+
         for (auto s : m_data->streams) {
             Json::Value vid;
             std::string fname = s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
             vid["file"] = fname;
-            
+
             double duration = 0.0;
             if (s->src_fps > 0.1) duration = (double)s->frames.size() / s->src_fps;
             vid["duration"] = duration;
-            
+
             videosArr.append(vid);
         }
-        
+
         if (!m_data->audio_frames.empty()) {
              Json::Value aud;
              std::string fname = "audio_" + m_data->start_timestamp + ".wav";
@@ -349,7 +349,7 @@ MainWindow::~MainWindow() {
 
         if (!m_data->session_bag_path.empty()) {
             std::string bag_name = m_data->session_bag_path.substr(m_data->session_bag_path.find_last_of("/\\\\") + 1);
-            indexRoot["rosbags"] = bag_name; 
+            indexRoot["rosbags"] = bag_name;
         }
 
         std::ofstream os(m_data->session_dir + "/index.json");
@@ -404,7 +404,7 @@ MainWindow::~MainWindow() {
         gst_element_send_event(m_data->audio_pipeline, gst_event_new_eos());
         gst_element_set_state(m_data->audio_pipeline, GST_STATE_NULL);
     }
-    
+
     for (auto s : m_data->streams) {
         if (s->pipeline) {
             gst_element_set_state(s->pipeline, GST_STATE_NULL);
@@ -413,7 +413,7 @@ MainWindow::~MainWindow() {
 
     // Shutdown ROS 2
     if (rclcpp::ok()) rclcpp::shutdown();
-    
+
     std::cout << "Cleanup finished in MainWindow destructor." << std::endl;
 }
 
@@ -422,7 +422,7 @@ MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream* s) {
     sw.container = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, WIDGET_SPACING_PX));
     sw.container->set_hexpand(true);
     sw.container->set_vexpand(true);
-    
+
     // Header: Name (Bold) <Space> Record [x]
     Gtk::Box* header_hbox = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
     sw.container->pack_start(*header_hbox, Gtk::PACK_SHRINK);
@@ -467,13 +467,13 @@ void MainWindow::populate_audio_sources() {
     gst_device_monitor_add_filter(mon, "Audio/Source", NULL);
     GList* devices = gst_device_monitor_get_devices(mon);
     int idx = 0, default_idx = 0;
-    
+
     for (GList* l = devices; l; l = l->next) {
         GstDevice* d = (GstDevice*)l->data;
         gchar* name = gst_device_get_display_name(d);
         GstStructure* p = gst_device_get_properties(d);
         const char* pulse_name = gst_structure_get_string(p, "device.name");
-        
+
         if (pulse_name) {
             m_audio_src_combo.append(pulse_name, name);
             if (!g_str_has_suffix(pulse_name, ".monitor") && strstr(name, "Default")) {
@@ -483,7 +483,7 @@ void MainWindow::populate_audio_sources() {
         }
         g_free(name); if (p) gst_structure_free(p);
     }
-    g_list_free_full(devices, (GDestroyNotify)gst_object_unref); 
+    g_list_free_full(devices, (GDestroyNotify)gst_object_unref);
     gst_object_unref(mon);
     m_audio_src_combo.set_active(default_idx);
 }
@@ -501,9 +501,9 @@ void MainWindow::update_stage_highlighting() {
 void MainWindow::on_bag_details_clicked() {
     Gtk::Dialog dialog("ROS Topic Details", *this, true);
     Gtk::Box* content = dialog.get_content_area();
-    
+
     std::stringstream ss;
-    
+
     {
         std::lock_guard<std::mutex> lock(m_data->data_mutex);
         ss << "<b>Subscribed Topics (" << m_data->bag_topics_found << "/" << m_data->ros_topics.size() << "):</b>\n";
@@ -516,12 +516,12 @@ void MainWindow::on_bag_details_clicked() {
             }
         }
     }
-    
+
     Gtk::Label* lbl = Gtk::manage(new Gtk::Label());
     lbl->set_markup(ss.str());
     lbl->set_padding(10, 10);
     content->add(*lbl);
-    
+
     dialog.add_button("Close", Gtk::RESPONSE_CLOSE);
     dialog.show_all_children();
     dialog.run();
@@ -541,7 +541,7 @@ void MainWindow::on_tag_clicked(const std::string& tag_name) {
     {
         std::lock_guard<std::mutex> lock(m_data->data_mutex);
         m_data->session_event_tags.push_back({tag_name, cpu_ts});
-        
+
         for (const auto& t : m_data->session_event_tags) {
             counts[t.first]++;
         }
@@ -580,7 +580,7 @@ void MainWindow::on_record_toggle() {
             m_data->audio_is_recording = audio_rec;
             g_object_set(m_data->audio_valve, "drop", !audio_rec, NULL);
         }
-        
+
         // ROS Bag is now continuous for the session, no open/close here.
 
         for (auto s : m_data->streams) {
@@ -593,9 +593,9 @@ void MainWindow::on_record_toggle() {
             m_data->audio_is_recording = false;
             g_object_set(m_data->audio_valve, "drop", TRUE, NULL);
         }
-        
+
         // Do not close ROS bag here.
-        
+
         {
              std::string stage_name = m_data->config_stages.empty() ? "stage" : m_data->config_stages[active_idx];
              char stage_buf[128];
@@ -607,7 +607,7 @@ void MainWindow::on_record_toggle() {
                  struct timespec ts;
                  clock_gettime(CLOCK_REALTIME, &ts);
                  long long end_cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-                 
+
                  std::lock_guard<std::mutex> lock(m_data->data_mutex);
                  m_data->session_stages.push_back({stage_name, m_data->recording_start_cpu_ts, end_cpu_ts});
                  m_data->recording_start_cpu_ts = 0; // Reset for next run
@@ -616,7 +616,7 @@ void MainWindow::on_record_toggle() {
              for (auto s : m_data->streams) {
                  s->last_run_stage_name = final_stage_name;
                  s->last_run_frames_recorded = s->frames_recorded;
-                 
+
                  s->is_recording = false;
                  if (s->valve) g_object_set(s->valve, "drop", TRUE, NULL);
                  // if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
@@ -645,17 +645,17 @@ void MainWindow::on_record_toggle() {
     for (auto s : m_data->streams) {
         gtk_widget_set_sensitive(s->record_checkbox, !m_data->global_recording);
     }
-    
+
     update_stage_highlighting();
 }
 
 bool MainWindow::on_ui_update() {
     if (m_data->is_quitting) return false;
-    
+
     for (auto s : m_data->streams) {
         char buf[256];
         if (s->is_recording) {
-            snprintf(buf, sizeof(buf), "REC | FPS: %.1f | Frames: %lld", 
+            snprintf(buf, sizeof(buf), "REC | FPS: %.1f | Frames: %lld",
                      s->current_fps, s->frames_recorded);
             // if (s->rec_text) g_object_set(s->rec_text, "text", "", NULL);
         } else {
@@ -664,7 +664,7 @@ bool MainWindow::on_ui_update() {
                 double duration_sec = 0.0;
                 if (s->src_fps > 0.1) duration_sec = (double)s->last_run_frames_recorded / s->src_fps;
 
-                snprintf(buf, sizeof(buf), "Last: %s (%lld f, %.1fs) | Src: %.1f", 
+                snprintf(buf, sizeof(buf), "Last: %s (%lld f, %.1fs) | Src: %.1f",
                          s->last_run_stage_name.c_str(), s->last_run_frames_recorded, duration_sec, s->src_fps);
              } else {
                 snprintf(buf, sizeof(buf), "%dx%d | Src: %.1f | Ready", s->width, s->height, s->src_fps);
@@ -677,9 +677,9 @@ bool MainWindow::on_ui_update() {
 
     char bag_buf[256];
     std::lock_guard<std::mutex> lock(m_data->data_mutex);
-    snprintf(bag_buf, sizeof(bag_buf), "Topics: %d/%lu\nMessages: %lld", 
+    snprintf(bag_buf, sizeof(bag_buf), "Topics: %d/%lu\nMessages: %lld",
              m_data->bag_topics_found, m_data->ros_topics.size(), m_data->bag_messages_recorded);
     m_bag_stats_label.set_text(bag_buf);
 
-    return true; 
+    return true;
 }

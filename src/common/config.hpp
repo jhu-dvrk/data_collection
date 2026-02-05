@@ -38,7 +38,7 @@ public:
     static bool load_from_file(const std::string& path, Json::Value& root);
     static std::vector<VideoConfig> parse_videos(const Json::Value& root);
     static AppConfig parse_app_config(const Json::Value& root);
-    
+
     // Helper to generate a GStreamer caps string from the encoding
     static std::string make_caps_string(const VideoEncoding& enc);
 };

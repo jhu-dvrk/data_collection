@@ -1,5 +1,5 @@
 {
-  "ros_topics": [ 
+  "ros_topics": [
     "/ECM1/measured_js",
     "/ECM1/measured_cp"
   ]

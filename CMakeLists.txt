@@ -40,7 +40,7 @@ target_link_libraries(data_collection_lib
 set_target_properties(data_collection_lib PROPERTIES OUTPUT_NAME "data_collection")
 
 # C++ Executable: record
-add_executable(record 
+add_executable(record
   src/record/main.cpp
   src/record/context.cpp
   src/record/pipeline.cpp

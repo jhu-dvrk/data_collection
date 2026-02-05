@@ -64,7 +64,7 @@ std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
 double get_audio_level_max(const GValue* gv) {
     double m = -100.0;
     if (!gv) return m;
-    
+
     if (GST_VALUE_HOLDS_LIST(gv)) {
         for (guint i=0; i < gst_value_list_get_size(gv); ++i) {
             const GValue *v = gst_value_list_get_value(gv, i);
@@ -74,7 +74,7 @@ double get_audio_level_max(const GValue* gv) {
         // G_GNUC_BEGIN_IGNORE_DEPRECATIONS
         // Removed deprecated GValueArray check to fix warnings. Relying on GST_VALUE_HOLDS_ARRAY.
         // G_GNUC_END_IGNORE_DEPRECATIONS
-        
+
         // Modern GStreamer: also check for array type
         if (GST_VALUE_HOLDS_ARRAY(gv)) {
             for (guint i=0; i < gst_value_array_get_size(gv); ++i) {
@@ -101,7 +101,7 @@ GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer u
             s->src_frame_counter = 0;
             s->last_src_ts = now;
         }
-        
+
         if (s->width == 0 || s->height == 0) {
             GstCaps *caps = gst_pad_get_current_caps(pad);
             if (caps) {
@@ -131,7 +131,7 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
         long long pts = (long long)GST_BUFFER_PTS(buf);
         if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
         long long duration = (long long)GST_BUFFER_DURATION(buf);
-        
+
         // Gapless stitching logic
         if (ad->audio_last_raw_pts != -1) {
             long long delta = pts - ad->audio_last_raw_pts;
@@ -139,7 +139,7 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
             if (delta > 500 * 1000000LL) {
                  long long expected_gap = ad->audio_last_duration;
                  if (!GST_CLOCK_TIME_IS_VALID(expected_gap) || expected_gap == 0) expected_gap = 20 * 1000000LL; // Default 20ms?
-                 
+
                  long long gap = delta - expected_gap;
                  if (gap > 0) ad->audio_total_offset_ns += gap;
             }
@@ -156,9 +156,9 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
         // long long base_time = 0; // Relative to 0 now
         // if (ad->audio_pipeline) base_time = (long long)gst_element_get_base_time(ad->audio_pipeline);
         // Note: GST_TS in sidecar should be the timestamp inside the file (relative to start 0).
-        // Since we are rewriting buffer timestamps to be continuous from 0 (implicitly if first pts ~ offset), 
+        // Since we are rewriting buffer timestamps to be continuous from 0 (implicitly if first pts ~ offset),
         // we use the modified PTS.
-        
+
         long long gst_ts = GST_BUFFER_PTS(buf);
 
         struct timespec ts;
@@ -175,7 +175,7 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
     VideoStream *s = (VideoStream *)user_data;
     if (s->is_recording && (info->type & GST_PAD_PROBE_TYPE_BUFFER)) {
         GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
-        
+
         // Ensure writable for timestamp modification
         if (!gst_buffer_is_writable(buf)) {
              // For video, deep copy is expensive. Use copy to share memory but new metadata.
@@ -197,7 +197,7 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
             if (delta > 500 * 1000000LL) {
                  long long expected_gap = s->last_duration;
                  if (!GST_CLOCK_TIME_IS_VALID(expected_gap) || expected_gap == 0) expected_gap = 33333333LL; // Default 30fps
-                 
+
                  long long gap = delta - expected_gap;
                  if (gap > 0) s->total_offset_ns += gap;
             }
@@ -210,20 +210,20 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
         if (GST_CLOCK_TIME_IS_VALID(GST_BUFFER_DTS(buf))) {
              GST_BUFFER_DTS(buf) = GST_BUFFER_DTS(buf) - s->total_offset_ns;
         }
-        
+
         long long gst_ts = GST_BUFFER_PTS(buf);
-        
+
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 
         s->frames.push_back({cpu_ts, gst_ts});
         s->frames_recorded++;
-        
+
         long long now = g_get_monotonic_time();
         if (s->last_fps_ts == 0) s->last_fps_ts = now;
         s->fps_frame_counter++;
-        
+
         if (now - s->last_fps_ts >= 1000000) {
             s->current_fps = (double)s->fps_frame_counter * 1000000.0 / (double)(now - s->last_fps_ts);
             s->fps_frame_counter = 0;
@@ -258,17 +258,17 @@ gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data) {
         if (gst_structure_has_name(s, "level")) {
             const GValue *rms_val = gst_structure_get_value(s, "rms");
             const GValue *peak_val = gst_structure_get_value(s, "peak");
-            
+
             double max_rms = get_audio_level_max(rms_val);
             double max_peak = get_audio_level_max(peak_val);
-            
+
             double display_val = std::max(max_rms, max_peak);
-            
+
             // Map -100dB..0dB to 0.0..1.0
             double lvl = (display_val + 100.0) / 100.0;
             if (lvl < 0) lvl = 0;
             if (lvl > 1) lvl = 1;
-            
+
             if (ad->audio_level_bar && GTK_IS_LEVEL_BAR(ad->audio_level_bar)) {
                 gtk_level_bar_set_value(GTK_LEVEL_BAR(ad->audio_level_bar), lvl);
             }
@@ -310,7 +310,7 @@ void create_audio_pipeline(AppData* data) {
         g_object_set(data->audio_sink, "location", af.c_str(), NULL);
         data->audio_valve = gst_bin_get_by_name(GST_BIN(data->audio_pipeline), "av");
         data->audio_src = gst_bin_get_by_name(GST_BIN(data->audio_pipeline), "asrc");
-        
+
         const gchar* id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(data->audio_src_combo));
         if (id) g_object_set(data->audio_src, "device", id, NULL);
 
@@ -346,7 +346,7 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
 
     std::string pstr = v.stream + " ! " + caps + ts_overlay + " ! tee name=__rec_t__ "
         "__rec_t__. ! queue name=__prev_q__ max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=__prev_overlay__ ! gtksink name=__prev_sink__ sync=false async=false ";
-    
+
     if (s->record_enabled) {
         pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! video/x-raw,format=NV12 ! " + get_best_encoder(v.encoding) + " ! queue name=__rec_q_enc__ max-size-buffers=1 leaky=downstream ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
     }
@@ -382,15 +382,15 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
     s->rec_overlay = gst_bin_get_by_name(GST_BIN(s->pipeline), "__prev_overlay__");
     if (s->rec_overlay) {
         g_signal_connect(s->rec_overlay, "draw", G_CALLBACK(on_rec_overlay_draw), s);
-        gst_object_unref(s->rec_overlay); 
-        // Note: we kept the pointer in struct but unref here? 
+        gst_object_unref(s->rec_overlay);
+        // Note: we kept the pointer in struct but unref here?
         // gst_bin_get_by_name returns a NEW ref.
         // We can keep it if we want, or rely on pipeline ownership.
         // The struct member is just a pointer, we don't own the ref unless recorded.
-        // Actually, previous code didn't unref rec_text? 
+        // Actually, previous code didn't unref rec_text?
         // Let's check. Yes, it did NOT unref rec_text.
         // It helps to keep a ref if we access it later. But we don't access rec_overlay later except in callback via user_data?
-        // Wait, on_rec_overlay_draw is called by element. 
+        // Wait, on_rec_overlay_draw is called by element.
         // We don't need to touch s->rec_overlay in UI anymore.
         // So we can unref it here. But if we want to follow RAII, s->rec_overlay should probably NOT hold a ref if the pipeline holds it,
         // BUT gst_bin_get_by_name returns a full reference. We MUST unref it eventually or when destroying struct.
@@ -405,12 +405,12 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
         // Minor leak. I'll stick to not unref-ing to match previous style, or better, unref it if not needed.
         // We don't need s->rec_overlay in UI anymore.
         // So I will NOT store it in s->rec_overlay if not needed, OR unref it.
-        // I changed struct to have rec_overlay. Let's store it and NOT unref, matching previous leak/style to be safe against double-unref fears if previous code did weird things. 
+        // I changed struct to have rec_overlay. Let's store it and NOT unref, matching previous leak/style to be safe against double-unref fears if previous code did weird things.
         // Actually I will unref it immediately because I don't need it outside this function setup since the callback handles it.
         // I'll keep the struct member and store it but I'll update the replacing code to match previous pattern.
         // Previous line: s->rec_text = gst_bin_get_by_name(...);
     }
-    
+
     GstElement *sink = gst_bin_get_by_name(GST_BIN(s->pipeline), "__prev_sink__");
     g_object_get(sink, "widget", &s->preview_widget, NULL);
     gtk_widget_set_size_request(s->preview_widget, 320, 240);
@@ -419,6 +419,6 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
     gst_object_unref(vpad);
     GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(s->pipeline));
     gst_bus_add_watch(bus, bus_call, data); gst_object_unref(bus);
-    
+
     return s;
 }

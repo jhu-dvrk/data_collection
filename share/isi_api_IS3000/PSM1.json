@@ -1,5 +1,5 @@
 {
-  "ros_topics": [ 
+  "ros_topics": [
     "/PSM1/measured_js",
     "/PSM1/measured_cp",
     "/PSM1/jaw/measured_js"

@@ -38,8 +38,8 @@ int main(int argc, char *argv[]) {
 
     // Initialize Gtkmm (strips GTK args)
     Gtk::Main kit(argc, argv);
-    
-    AppData data; 
+
+    AppData data;
     std::vector<std::string> configs;
 
     unsigned int cores = std::thread::hardware_concurrency();
@@ -87,7 +87,7 @@ int main(int argc, char *argv[]) {
     data.node = std::make_shared<rclcpp::Node>("record_c");
     if (!data.trigger_topic.empty()) {
         data.sub_record = data.node->create_subscription<std_msgs::msg::Bool>(
-            data.trigger_topic, 10, 
+            data.trigger_topic, 10,
             [&](const std_msgs::msg::Bool::SharedPtr msg) { ros_record_callback(msg, &data); }
         );
         std::cout << "Subscribed to trigger topic: " << data.trigger_topic << std::endl;
@@ -115,7 +115,7 @@ int main(int argc, char *argv[]) {
     for (const auto& cfg : app_configs) {
         if (!cfg.data_directory.empty() && cfg.data_directory != ".") data.data_directory = cfg.data_directory;
         data.enable_audio = data.enable_audio || cfg.enable_audio;
-        
+
         if (!cfg.stages.empty()) {
             data.explicit_stages = true;
             data.config_stages.insert(data.config_stages.end(), cfg.stages.begin(), cfg.stages.end());
@@ -157,17 +157,17 @@ int main(int argc, char *argv[]) {
 
     // Initialize UI Window
     MainWindow window(&data);
-    
+
     create_audio_pipeline(&data);
     for (auto s : data.streams) gst_element_set_state(s->pipeline, GST_STATE_PLAYING);
-    
+
     // Handle Ctrl+C
     g_unix_signal_add(SIGINT, on_sigint, &data);
 
     // Run Main Loop
     // start_ui_update_loop(&data); // Replaced by MainWindow timer
     Gtk::Main::run(window);
-    
+
     // Shutdown ROS 2 and join thread
     if (rclcpp::ok()) {
         rclcpp::shutdown();

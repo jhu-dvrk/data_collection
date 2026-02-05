@@ -41,7 +41,7 @@ struct VideoStream {
     long long last_run_frames_recorded;
     std::string last_run_stage_name;
     double current_fps;
-    
+
     // Source Stats
     int width, height;
     double src_fps;
@@ -57,7 +57,7 @@ struct VideoStream {
     long long last_fps_ts;
     long long fps_frame_counter;
 
-    VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL), 
+    VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL),
                     is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0),
                     width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                     total_offset_ns(0), last_raw_pts(-1), last_duration(0),
@@ -72,7 +72,7 @@ struct AppData {
     std::string data_directory, session_dir, start_timestamp, audio_output_json;
     std::string audio_pipeline_desc;
     std::vector<FrameData> audio_frames;
-    
+
     // Audio Stitching
     long long audio_total_offset_ns;
     long long audio_last_raw_pts;
@@ -93,14 +93,14 @@ struct AppData {
     int current_stage_idx; // Track the current stage index for UI highlighting
     long long recording_start_cpu_ts;
     bool global_recording, blink_state, session_initialized, audio_is_recording, is_quitting;
-    bool enable_audio; 
+    bool enable_audio;
     int eos_received_count;
 
     // ROS 2 members
     std::string trigger_topic;
     std::shared_ptr<rclcpp::Node> node;
     std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Bool>> sub_record;
-    
+
     // ROS Bag members
     std::string session_bag_path;
     std::vector<std::string> ros_topics;
@@ -117,7 +117,7 @@ struct AppData {
     bool explicit_stages;
 
     std::mutex data_mutex;
-    
+
     AppData(); // Defined in cpp
     ~AppData(); // Defined in cpp
 };
