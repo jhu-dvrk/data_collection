@@ -9,82 +9,99 @@ import csv
 import rosbag2_py
 import multiprocessing
 import math
+import numpy as np
+import re
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 from rosidl_runtime_py.convert import message_to_ordereddict
 
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-9]+)', s)]
+
 def flatten_dict(d, parent_key='', sep='.'):
     items = []
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict) or (hasattr(v, 'items') and callable(getattr(v, 'items'))):
-            items.extend(flatten_dict(dict(v), new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
+    if isinstance(d, (dict,)) or (hasattr(d, 'items') and callable(getattr(d, 'items'))):
+        for k, v in d.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+    elif isinstance(d, (list, tuple, np.ndarray)):
+        for i, v in enumerate(d):
+            new_key = f"{parent_key}{sep}{i}"
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+    else:
+        items.append((parent_key, d))
     return dict(items)
 
 def detect_rosbag_format(bag_path):
-    """Detect the storage format of a rosbag2 directory.
-    Returns 'mcap', 'sqlite3', or None if unable to detect.
-    """
-    # Check for common storage files
     if os.path.isdir(bag_path):
-        # Look for mcap file
         mcap_files = [f for f in os.listdir(bag_path) if f.endswith('.mcap')]
-        if mcap_files:
-            return 'mcap'
-        
-        # Look for sqlite3 db file
+        if mcap_files: return 'mcap'
         db3_files = [f for f in os.listdir(bag_path) if f.endswith('.db3')]
-        if db3_files:
-            return 'sqlite3'
+        if db3_files: return 'sqlite3'
     
-    # Try opening with each storage plugin
     reader = rosbag2_py.SequentialReader()
     for storage_id in ['mcap', 'sqlite3']:
         try:
-            reader.open(
-                rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
-                rosbag2_py.ConverterOptions('', '')
-            )
+            reader.open(rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
+                        rosbag2_py.ConverterOptions('', ''))
             return storage_id
-        except Exception:
-            continue
-    
+        except Exception: continue
     return None
 
-def rosbag_to_csv(bag_path, output_dir):
+def rosbag_to_csv(bag_path, output_dir, start_ns=None, end_ns=None):
     print(f"Converting ROS bag {bag_path} to CSV...")
-    
-    # Detect storage format
     storage_id = detect_rosbag_format(bag_path)
     if not storage_id:
         print(f"Error: Unable to detect rosbag format for {bag_path}")
         return
     
-    print(f"Detected rosbag storage format: {storage_id}")
-    
-    reader = rosbag2_py.SequentialReader()
+    # Pass 1: Discover all fields and vector sizes
+    print("Pass 1: Discovering columns and vector sizes...")
+    topic_fields = {} # topic -> set of field names
+    reader_p1 = rosbag2_py.SequentialReader()
     try:
-        reader.open(
-            rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
-            rosbag2_py.ConverterOptions('', '')
-        )
+        reader_p1.open(rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
+                       rosbag2_py.ConverterOptions('', ''))
     except Exception as e:
-        print(f"Error opening rosbag with {storage_id} format: {e}")
+        print(f"Error opening rosbag for Pass 1: {e}")
         return
 
-    topic_types = {topic.name: topic.type for topic in reader.get_all_topics_and_types()}
+    topic_types = {topic.name: topic.type for topic in reader_p1.get_all_topics_and_types()}
+    
+    while reader_p1.has_next():
+        (topic, data, t) = reader_p1.read_next()
+        if start_ns is not None and t < start_ns: continue
+        if end_ns is not None and t > end_ns: continue
+        
+        if topic not in topic_fields:
+            topic_fields[topic] = set(['timestamp'])
+            
+        msg_type = get_message(topic_types[topic])
+        msg = deserialize_message(data, msg_type)
+        msg_dict = flatten_dict(message_to_ordereddict(msg))
+        topic_fields[topic].update(msg_dict.keys())
+    
+    del reader_p1 # Close reader for re-opening
+
+    # Pass 2: Write data with unified header
+    print("Pass 2: Writing CSV data...")
+    reader_p2 = rosbag2_py.SequentialReader()
+    try:
+        reader_p2.open(rosbag2_py.StorageOptions(uri=bag_path, storage_id=storage_id),
+                       rosbag2_py.ConverterOptions('', ''))
+    except Exception as e:
+        print(f"Error opening rosbag for Pass 2: {e}")
+        return
+    
     writers = {}
     files = {}
 
     try:
-        while reader.has_next():
-            (topic, data, t) = reader.read_next()
-            msg_type = get_message(topic_types[topic])
-            msg = deserialize_message(data, msg_type)
-            
-            msg_dict = flatten_dict(message_to_ordereddict(msg))
+        while reader_p2.has_next():
+            (topic, data, t) = reader_p2.read_next()
+            if start_ns is not None and t < start_ns: continue
+            if end_ns is not None and t > end_ns: continue
             
             if topic not in writers:
                 csv_name = topic.replace('/', '_').strip('_') + ".csv"
@@ -92,231 +109,185 @@ def rosbag_to_csv(bag_path, output_dir):
                 f = open(csv_path, 'w', newline='')
                 files[topic] = f
                 
-                # Write metadata header
-                f.write(f"# Topic: {topic}\n")
-                f.write(f"# Type: {topic_types[topic]}\n")
+                f.write(f"# Topic: {topic}\n# Type: {topic_types[topic]}\n")
                 
-                fieldnames = ['timestamp'] + list(msg_dict.keys())
+                # Natural sort field names
+                fieldnames = sorted(list(topic_fields[topic]), key=natural_sort_key)
+                if 'timestamp' in fieldnames:
+                    fieldnames.remove('timestamp')
+                    fieldnames = ['timestamp'] + fieldnames
+                
                 writers[topic] = csv.DictWriter(f, fieldnames=fieldnames)
                 writers[topic].writeheader()
-                
+            
+            msg_type = get_message(topic_types[topic])
+            msg = deserialize_message(data, msg_type)
             row = {'timestamp': t}
-            row.update(msg_dict)
+            row.update(flatten_dict(message_to_ordereddict(msg)))
             writers[topic].writerow(row)
     except Exception as e:
         print(f"Error reading bag: {e}")
     finally:
-        for f in files.values():
-            f.close()
-    print(f"Finished CSV conversion.")
+        for f in files.values(): f.close()
+    print("Finished CSV conversion.")
 
 def process_video_chunk(args):
-    """
-    Worker function to process a chunk of the video.
-    args: (video_path, output_dir, timestamps_chunk, start_frame_idx, image_format, video_basename, is_ns, is_ms)
-    """
-    video_path, output_dir, timestamps, start_frame_idx, image_format, video_basename, is_ns, is_ms = args
-    
+    video_path, output_dir, timestamps, start_frame_idx, output_format, video_basename, is_ns, is_ms = args
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"Error: Could not open video {video_path} in worker.")
-        return 0
+    if not cap.isOpened(): return 0
 
-    # Seek to start frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_idx)
-    
     saved_count = 0
     for i, ts in enumerate(timestamps):
         ret, frame = cap.read()
-        if not ret:
-            break
-            
-        # Format timestamp in filename
-        if is_ns:
-            ts_str = f"{int(ts) / 1e9:.9f}"
-        elif is_ms:
-            ts_str = f"{float(ts) / 1000.0:.6f}"
-        else:
-            ts_str = f"{float(ts):.6f}"
+        if not ret: break
         
-        image_name = f"{video_basename}_{ts_str}.{image_format}"
-        image_path = os.path.join(output_dir, image_name)
+        if is_ns: ts_str = f"{int(ts) / 1e9:.9f}"
+        elif is_ms: ts_str = f"{float(ts) / 1000.0:.6f}"
+        else: ts_str = f"{float(ts):.6f}"
         
-        cv2.imwrite(image_path, frame)
+        image_name = f"{video_basename}_{ts_str}.{output_format}"
+        cv2.imwrite(os.path.join(output_dir, image_name), frame)
         saved_count += 1
-        
     cap.release()
     return saved_count
 
-def extract_frames(input_path, output_dir=None, image_format='png', num_jobs=1):
-    if not input_path.lower().endswith('.json'):
-        print("Error: Input must be a JSON timestamp file.")
-        return
-
-    json_path = input_path
-    video_path = None
+def extract_video_range(video_path, output_path, start_frame, end_frame, fps):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened(): return False
     
-    # Read JSON
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    for i in range(start_frame, end_frame + 1):
+        ret, frame = cap.read()
+        if not ret: break
+        out.write(frame)
+        
+    cap.release()
+    out.release()
+    return True
+
+def extract_session_data(json_path, output_dir, formats, num_jobs, start_ns=None, end_ns=None):
     try:
-        with open(json_path, 'r') as f:
-            data = json.load(f)
+        with open(json_path, 'r') as f: data = json.load(f)
     except Exception as e:
-        print(f"Error reading JSON: {e}")
+        print(f"Error reading {json_path}: {e}")
         return
 
-    # Determine video path
     video_filename = data.get("video_file")
+    video_path = None
     if video_filename:
-        video_path = os.path.join(os.path.dirname(input_path), video_filename)
-        
+        video_path = os.path.join(os.path.dirname(json_path), video_filename)
     if not video_path or not os.path.exists(video_path):
-         base = os.path.splitext(input_path)[0]
-         possible_vid = base + ".mp4"
-         if os.path.exists(possible_vid):
-             video_path = possible_vid
+        base = os.path.splitext(json_path)[0]
+        if os.path.exists(base + ".mp4"):
+            video_path = base + ".mp4"
 
-    if not video_path or not os.path.exists(video_path):
-        print(f"Error: Video file not found. Checked from valid JSON key or implicit name: {video_path}")
-        return
+    if not video_path: return
 
-    # Load timestamps
-    print(f"Loading timestamps from {json_path}...")
     timestamps = data.get("timestamps_ns", data.get("timestamps", data.get("timestamps_ms")))
-        
-    if not timestamps:
-        print("Error: No timestamps found in JSON file")
-        return
-
     is_ns = "timestamps_ns" in data
     is_ms = "timestamps_ms" in data and not is_ns
 
-    # Output directory
+    if not timestamps and "frames" in data:
+        frames = data["frames"]
+        if frames and isinstance(frames[0], dict):
+            timestamps = [f.get("cpu_ts", f.get("gst_ts", 0)) for f in frames]
+            is_ns = True; is_ms = False
+
+    if not timestamps: return
+
+    indices = range(len(timestamps))
+    if start_ns is not None or end_ns is not None:
+        indices = [i for i, ts in enumerate(timestamps) if 
+                   (start_ns is None or ts >= start_ns) and 
+                   (end_ns is None or ts <= end_ns)]
+    
+    if not indices: return
+    
+    start_idx = indices[0]
+    end_idx = indices[-1]
+    filtered_timestamps = [timestamps[i] for i in indices]
     video_basename = os.path.splitext(os.path.basename(video_path))[0]
-    if output_dir is None:
-        output_dir = os.path.dirname(video_path)
     
-    if not os.path.exists(output_dir):
-        try:
-            os.makedirs(output_dir)
-        except OSError as e:
-            print(f"Error creating output directory {output_dir}: {e}")
-            return
-
-    print(f"[{video_basename}] Processing {video_path}")
-    print(f"[{video_basename}] Total timestamps: {len(timestamps)}")
-    print(f"[{video_basename}] Output directory: {output_dir}")
-    print(f"[{video_basename}] Parallel jobs: {num_jobs}")
-
-    # Prepare chunks
-    total_frames = len(timestamps)
-    chunk_size = math.ceil(total_frames / num_jobs)
-    
-    tasks = []
-    for i in range(num_jobs):
-        start_idx = i * chunk_size
-        end_idx = min((i + 1) * chunk_size, total_frames)
-        
-        if start_idx >= total_frames:
-            break
+    for fmt in formats:
+        if fmt == 'mp4':
+            fps = data.get("fps", 30.0)
+            out_name = f"{video_basename}.mp4"
+            print(f"Extracting video segment: {out_name}")
+            extract_video_range(video_path, os.path.join(output_dir, out_name), start_idx, end_idx, fps)
+        else:
+            tasks = []
+            chunk_size = math.ceil(len(indices) / num_jobs)
+            for i in range(num_jobs):
+                s = i * chunk_size
+                e = min((i + 1) * chunk_size, len(indices))
+                if s >= len(indices): break
+                tasks.append((video_path, output_dir, filtered_timestamps[s:e], start_idx + s, fmt, video_basename, is_ns, is_ms))
             
-        chunk_timestamps = timestamps[start_idx:end_idx]
-        
-        # Args: (video_path, output_dir, timestamps_chunk, start_frame_idx, image_format, video_basename, is_ns, is_ms)
-        task_args = (
-            video_path, 
-            output_dir, 
-            chunk_timestamps, 
-            start_idx, # start_frame_idx assumes 1-to-1 mapping with timestamps idx
-            image_format, 
-            video_basename, 
-            is_ns, 
-            is_ms
-        )
-        tasks.append(task_args)
-
-    # Run in parallel
-    total_saved = 0
-    if num_jobs > 1:
-        with multiprocessing.Pool(processes=num_jobs) as pool:
-            results = pool.map(process_video_chunk, tasks)
-            total_saved = sum(results)
-    else:
-        # Sequential fallback (avoid overhead)
-        total_saved = process_video_chunk(tasks[0])
-
-    print(f"[{video_basename}] Done. Extracted {total_saved} frames to {output_dir}")
+            if num_jobs > 1:
+                with multiprocessing.Pool(processes=num_jobs) as pool: pool.map(process_video_chunk, tasks)
+            else:
+                process_video_chunk(tasks[0])
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract frames from all videos in a session directory using index.json")
-    parser.add_argument("-d", "--directory", help="Path to the recording session directory", required=True)
-    parser.add_argument("-l", "--list", action="store_true", help="List names of videos in the session but do not extract frames")
-    parser.add_argument("-f", "--format", choices=['jpg', 'png'], default='png', help="Output image format (jpg or png, default: png)")
-    parser.add_argument("-j", "--jobs", type=int, help="Number of parallel jobs per video (default: half of available cores)")
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-d", "--directory", help="Session directory", required=True)
+    parser.add_argument("-t", "--tags", help="Tags JSON file")
+    parser.add_argument("-a", "--all", action="store_true", help="Extract all data")
+    parser.add_argument("-f", "--format", choices=['jpg', 'png', 'mp4'], action='append', help="Output format(s).")
+    parser.add_argument("-j", "--jobs", type=int)
     args = parser.parse_args()
 
-    # Determine default jobs
-    cpu_count = os.cpu_count() or 1
-    if args.jobs:
-        num_jobs = args.jobs
-    else:
-        num_jobs = max(1, cpu_count // 2)
+    if not args.tags and not args.all:
+        print("Error: Either -t (tags) or -a (all) must be specified.")
+        sys.exit(1)
 
+    formats = args.format if args.format else ['mp4']
+    num_jobs = args.jobs or max(1, (os.cpu_count() or 1) // 2)
+    
     index_path = os.path.join(args.directory, "index.json")
-    if not os.path.exists(index_path):
-        print(f"Error: index.json not found in {args.directory}")
-        sys.exit(1)
-        
-    try:
-        with open(index_path, 'r') as f:
-            index_data = json.load(f)
-    except Exception as e:
-        print(f"Error reading index.json: {e}")
-        sys.exit(1)
-        
+    with open(index_path, 'r') as f: index_data = json.load(f)
+    
     videos = index_data.get("videos", [])
-    if not videos:
-        print("No videos found in index.json")
-        return
+    rosbag_name = index_data.get("rosbags", index_data.get("rosbag", {}).get("name") if isinstance(index_data.get("rosbag"), dict) else None)
 
-    if args.list:
-        session_name = os.path.basename(args.directory.rstrip('/'))
-        print(f"Videos in session {session_name}:")
-        for video_entry in videos:
-            video_basename = os.path.splitext(video_entry.get("file", ""))[0]
-            print(f" - {video_basename}")
-        return
+    base_extracted_dir = os.path.join(args.directory, "extracted")
+    os.makedirs(base_extracted_dir, exist_ok=True)
+
+    extraction_targets = []
+    if args.all:
+        extraction_targets.append({"name": "full_session", "start": None, "end": None})
+    if args.tags:
+        tags_path = args.tags if os.path.isabs(args.tags) else os.path.join(args.directory, args.tags)
+        with open(tags_path, 'r') as f: tags_data = json.load(f)
+        stage_counts = {}
+        for stage in tags_data.get("stages", []):
+            name = stage["name"]
+            stage_counts[name] = stage_counts.get(name, 0) + 1
+            dir_name = f"{name}_{stage_counts[name]:03d}"
+            extraction_targets.append({"name": dir_name, "start": stage["start"], "end": stage["end"]})
+
+    for target in extraction_targets:
+        target_dir = os.path.join(base_extracted_dir, target["name"])
+        os.makedirs(target_dir, exist_ok=True)
+        print(f"Processing target: {target['name']}")
         
-    extracted_dir = os.path.join(args.directory, "extracted")
-    if not os.path.exists(extracted_dir):
-        try:
-            os.makedirs(extracted_dir)
-            print(f"Created extraction directory: {extracted_dir}")
-        except OSError as e:
-            print(f"Error creating directory {extracted_dir}: {e}")
-            sys.exit(1)
-
-    # Process videos sequentially, but each video uses parallel extraction
-    for video_entry in videos:
-        video_basename = os.path.splitext(video_entry.get("file", ""))[0]
-
-        json_file = os.path.join(args.directory, f"{video_basename}.json")
-        if os.path.exists(json_file):
-            extract_frames(json_file, extracted_dir, args.format, num_jobs)
-        else:
-            print(f"Warning: JSON file not found for video: {video_basename}")
-            
-
-    # Process ROS bag if present
-    rosbag_entry = index_data.get("rosbag")
-    if rosbag_entry and isinstance(rosbag_entry, dict):
-        rosbag_name = rosbag_entry.get("name")
+        for v in videos:
+            v_base = os.path.splitext(v["file"])[0]
+            v_json = os.path.join(args.directory, f"{v_base}.json")
+            if os.path.exists(v_json):
+                extract_session_data(v_json, target_dir, formats, num_jobs, target["start"], target["end"])
+        
         if rosbag_name:
             bag_path = os.path.join(args.directory, rosbag_name)
             if os.path.exists(bag_path):
-                rosbag_to_csv(bag_path, extracted_dir)
-            else:
-                print(f"Warning: Rosbag directory not found at {bag_path}")
+                rosbag_to_csv(bag_path, target_dir, target["start"], target["end"])
 
 if __name__ == "__main__":
     main()
