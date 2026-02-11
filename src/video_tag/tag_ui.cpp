@@ -50,6 +50,7 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
     m_timeline_hbox.pack_start(*Gtk::make_managed<Gtk::Label>("Time:"), Gtk::PACK_SHRINK);
     m_timeline_slider.set_range(0, 100);
     m_timeline_slider.set_draw_value(false);
+    m_timeline_slider.set_tooltip_text("Seek by time");
     m_timeline_slider.signal_value_changed().connect(sigc::mem_fun(*this, &TagWindow::on_slider_moved));
     m_timeline_hbox.pack_start(m_timeline_slider, Gtk::PACK_EXPAND_WIDGET);
     m_duration_label.set_text("00:00:00 / 00:00:00");
@@ -60,6 +61,7 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
     m_frame_hbox.pack_start(*Gtk::make_managed<Gtk::Label>("Frame:"), Gtk::PACK_SHRINK);
     m_frame_slider.set_range(0, 100);
     m_frame_slider.set_draw_value(false);
+    m_frame_slider.set_tooltip_text("Seek by frame number");
     m_frame_slider.signal_value_changed().connect(sigc::mem_fun(*this, &TagWindow::on_frame_slider_moved));
     m_frame_hbox.pack_start(m_frame_slider, Gtk::PACK_EXPAND_WIDGET);
     m_frame_label.set_text("0 / 0");
@@ -69,18 +71,22 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
 
     // Controls
     m_begin_btn.set_label("Begin");
+    m_begin_btn.set_tooltip_text("Jump to beginning (a)");
     m_begin_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_begin));
     m_controls_hbox.pack_start(m_begin_btn, Gtk::PACK_SHRINK);
 
-    m_prev_btn.set_label("Prev Frame");
+    m_prev_btn.set_label("Previous");
+    m_prev_btn.set_tooltip_text("Previous frame (s)");
     m_prev_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_prev_frame));
     m_controls_hbox.pack_start(m_prev_btn, Gtk::PACK_SHRINK);
 
-    m_play_btn.set_label("Play/Pause");
+    m_play_btn.set_label("Play");
+    m_play_btn.set_tooltip_text("Play/Pause (d)");
     m_play_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_play_pause));
     m_controls_hbox.pack_start(m_play_btn, Gtk::PACK_SHRINK);
 
-    m_next_btn.set_label("Next Frame");
+    m_next_btn.set_label("Next");
+    m_next_btn.set_tooltip_text("Next frame (f)");
     m_next_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_next_frame));
     m_controls_hbox.pack_start(m_next_btn, Gtk::PACK_SHRINK);
 
@@ -93,6 +99,7 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
     m_speed_combo.append("1.5", "1.5x");
     m_speed_combo.append("2.0", "2.0x");
     m_speed_combo.set_active_id("1.0");
+    m_speed_combo.set_tooltip_text("Adjust playback speed");
     m_speed_combo.signal_changed().connect(sigc::mem_fun(*this, &TagWindow::on_speed_changed));
     m_controls_hbox.pack_start(m_speed_combo, Gtk::PACK_SHRINK);
 
@@ -105,16 +112,18 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
     m_right_vbox.pack_start(*tags_title, Gtk::PACK_SHRINK);
 
     m_tags_scroll.set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
-    m_tags_grid.set_column_spacing(10);
-    m_tags_grid.set_row_spacing(5);
+    m_tags_grid.set_column_spacing(5);
+    m_tags_grid.set_row_spacing(2);
     m_tags_scroll.add(m_tags_grid);
     m_right_vbox.pack_start(m_tags_scroll, Gtk::PACK_EXPAND_WIDGET);
 
     m_save_btn.set_label("Save Tags");
+    m_save_btn.set_tooltip_text("Save current tags to file");
     m_save_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_save));
     m_save_quit_hbox.pack_start(m_save_btn, Gtk::PACK_EXPAND_WIDGET);
 
     m_quit_btn.set_label("Quit");
+    m_quit_btn.set_tooltip_text("Quit (q)");
     m_quit_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::close));
     m_save_quit_hbox.pack_start(m_quit_btn, Gtk::PACK_SHRINK);
 
@@ -132,6 +141,7 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
 
     m_timer_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &TagWindow::on_ui_update_timer), 100);
     signal_key_press_event().connect(sigc::mem_fun(*this, &TagWindow::on_key_press), false);
+    signal_key_release_event().connect(sigc::mem_fun(*this, &TagWindow::on_key_release), false);
 }
 
 TagWindow::~TagWindow() {
@@ -152,18 +162,24 @@ void TagWindow::load_config(const std::string& path) {
     auto add_row = [this](const std::string& tag_name){
         auto* btn = Gtk::make_managed<Gtk::ToggleButton>(tag_name);
         btn->set_hexpand(true);
+        btn->set_margin_top(1);
+        btn->set_margin_bottom(1);
         m_tags_grid.attach(*btn, 0, m_grid_row_count, 1, 1);
         m_tag_buttons[tag_name] = btn;
         btn->signal_clicked().connect([this, tag_name](){ on_tag_toggle(tag_name); });
 
         auto* count_lbl = Gtk::make_managed<Gtk::Label>("0");
         count_lbl->set_width_chars(3);
+        count_lbl->set_margin_top(1);
+        count_lbl->set_margin_bottom(1);
         m_tags_grid.attach(*count_lbl, 1, m_grid_row_count, 1, 1);
         m_tag_count_labels[tag_name] = count_lbl;
 
         auto* combo = Gtk::make_managed<Gtk::ComboBoxText>();
         combo->set_no_show_all(true);
         combo->hide();
+        combo->set_margin_top(1);
+        combo->set_margin_bottom(1);
         m_tags_grid.attach(*combo, 2, m_grid_row_count, 1, 1);
         m_tag_combos[tag_name] = combo;
         combo->signal_changed().connect([this, tag_name](){ on_tag_jump(tag_name); });
@@ -335,8 +351,10 @@ void TagWindow::on_play_pause() {
     gst_element_get_state(m_data.pipeline, &current, &pending, 0);
     if (current == GST_STATE_PLAYING) {
         gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
+        m_play_btn.set_label("Play");
     } else {
         gst_element_set_state(m_data.pipeline, GST_STATE_PLAYING);
+        m_play_btn.set_label("Pause");
         // Ensure speed is maintained
         on_speed_changed();
     }
@@ -350,6 +368,7 @@ long long TagWindow::frame_to_ns(long long frame) {
 }
 
 void TagWindow::on_begin() {
+    if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
     do_seek(frame_to_ns(0));
 }
 
@@ -368,12 +387,14 @@ void TagWindow::on_next_frame() {
 
 void TagWindow::on_slider_moved() {
     if (m_internal_update) return;
+    if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
     long long ns = (long long)(m_timeline_slider.get_value() * 1e6);
     do_seek(ns);
 }
 
 void TagWindow::on_frame_slider_moved() {
     if (m_internal_update) return;
+    if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
     long long frame = (long long)m_frame_slider.get_value();
     do_seek(frame_to_ns(frame));
 }
@@ -414,15 +435,8 @@ void TagWindow::on_tag_jump(const std::string& tag_name) {
 
     long long frame = std::stoll(id);
     m_data.current_frame = frame; // Update state immediately to prevent sync lag
+    if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
     do_seek(frame_to_ns(frame));
-
-    // Pause video after seeking to tag
-    GstState current, pending;
-    if (m_data.pipeline && gst_element_get_state(m_data.pipeline, &current, &pending, 0) == GST_STATE_CHANGE_SUCCESS) {
-        if (current == GST_STATE_PLAYING) {
-            on_play_pause();
-        }
-    }
 }
 
 void TagWindow::update_tag_navigation_ui() {
@@ -481,6 +495,15 @@ bool TagWindow::on_ui_update_timer() {
     if (gst_element_query_position(m_data.pipeline, GST_FORMAT_TIME, &pos)) {
         m_internal_update = true;
 
+        // Update Play/Pause button label based on actual state
+        GstState current, pending;
+        gst_element_get_state(m_data.pipeline, &current, &pending, 0);
+        if (current == GST_STATE_PLAYING) {
+            m_play_btn.set_label("Pause");
+        } else {
+            m_play_btn.set_label("Play");
+        }
+
         long long frame = 0;
         if (!m_data.frame_gst_timestamps.empty()) {
             auto it = std::lower_bound(m_data.frame_gst_timestamps.begin(), m_data.frame_gst_timestamps.end(), pos);
@@ -522,14 +545,55 @@ bool TagWindow::on_ui_update_timer() {
 }
 
 bool TagWindow::on_key_press(GdkEventKey* event) {
+    if (event->keyval == GDK_KEY_s) {
+        if (!m_key_s_pressed) {
+            m_key_s_pressed = true;
+            on_prev_frame();
+            if (!m_step_timer_conn.connected())
+                m_step_timer_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &TagWindow::on_step_timer), 200);
+        }
+        return true;
+    }
+    if (event->keyval == GDK_KEY_f) {
+        if (!m_key_f_pressed) {
+            m_key_f_pressed = true;
+            on_next_frame();
+            if (!m_step_timer_conn.connected())
+                m_step_timer_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &TagWindow::on_step_timer), 200);
+        }
+        return true;
+    }
+
     switch (event->keyval) {
         case GDK_KEY_d: on_play_pause(); return true;
-        case GDK_KEY_s: on_prev_frame(); return true;
-        case GDK_KEY_f: on_next_frame(); return true;
         case GDK_KEY_a: on_begin(); return true;
         case GDK_KEY_q: close(); return true;
     }
     return false;
+}
+
+bool TagWindow::on_key_release(GdkEventKey* event) {
+    if (event->keyval == GDK_KEY_s) {
+        m_key_s_pressed = false;
+        return true;
+    }
+    if (event->keyval == GDK_KEY_f) {
+        m_key_f_pressed = false;
+        return true;
+    }
+    return false;
+}
+
+bool TagWindow::on_step_timer() {
+    if (m_key_s_pressed) {
+        on_prev_frame();
+        return true;
+    }
+    if (m_key_f_pressed) {
+        on_next_frame();
+        return true;
+    }
+    return false; // Disconnect timer
 }
 
 std::string TagWindow::format_time(long long ns) {

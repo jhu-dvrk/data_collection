@@ -56,6 +56,8 @@ protected:
 
     bool on_ui_update_timer();
     bool on_key_press(GdkEventKey* event);
+    bool on_key_release(GdkEventKey* event);
+    bool on_step_timer();
 
     // Helper methods
     void load_config(const std::string& path);
@@ -74,6 +76,10 @@ protected:
     TagData m_data;
     bool m_internal_update = false;
     bool m_load_session_tags = false;
+
+    bool m_key_s_pressed = false;
+    bool m_key_f_pressed = false;
+    sigc::connection m_step_timer_conn;
 
     // UI Widgets
     Gtk::Box m_main_hbox;
