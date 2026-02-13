@@ -126,6 +126,7 @@ ament_python_install_package(${PROJECT_NAME})
 # Python Scripts (wrappers)
 install(PROGRAMS
   scripts/extract
+  scripts/encord_to_tags
   DESTINATION lib/${PROJECT_NAME}
 )
 

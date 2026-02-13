@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+import json
+import argparse
+import os
+
+def convert_encord_to_tags(encord_path, sidecar_path, output_path):
+    print(f"Loading Encord file: {encord_path}")
+    with open(encord_path, 'r') as f:
+        encord_raw = json.load(f)
+    
+    # Encord export can be a list of records or a single record
+    if isinstance(encord_raw, list):
+        if not encord_raw:
+            print("Error: Encord file is an empty list.")
+            return
+        encord_data = encord_raw[0]
+    else:
+        encord_data = encord_raw
+
+    print(f"Loading Sidecar file: {sidecar_path}")
+    with open(sidecar_path, 'r') as f:
+        sidecar_data = json.load(f)
+    
+    frames = sidecar_data.get('frames', [])
+    num_frames = len(frames)
+    
+    stages = []
+    
+    classification_answers = encord_data.get('classification_answers', {})
+    
+    from datetime import datetime
+    def reformat_date(date_str):
+        if not date_str:
+            return None
+        try:
+            # Encord format: "Thu, 12 Feb 2026 20:14:47 GMT"
+            dt = datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S %Z")
+            return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+        except:
+            return date_str
+
+    for answer_id, answer_data in classification_answers.items():
+        classifications = answer_data.get('classifications', [])
+        source_generated_at = reformat_date(answer_data.get('createdAt'))
+        if not classifications:
+            continue
+            
+        # Get name and value from the first classification (as per user's observation)
+        name = classifications[0].get('name') or classifications[0].get('value') or 'unknown'
+        
+        ranges = answer_data.get('range', [])
+        for r in ranges:
+            if len(r) != 2:
+                continue
+                
+            start_frame = int(r[0])
+            end_frame = int(r[1])
+            
+            # Bounds checking
+            if start_frame < 0: start_frame = 0
+            if end_frame >= num_frames: end_frame = num_frames - 1
+            
+            if start_frame >= num_frames or end_frame < 0:
+                print(f"Warning: Range [{start_frame}, {end_frame}] is out of bounds for sidecar with {num_frames} frames.")
+                continue
+
+            start_ts = frames[start_frame]['cpu_ts']
+            end_ts = frames[end_frame]['cpu_ts']
+            
+            stage_entry = {
+                "name": name,
+                "start": {
+                    "cpu_ts": start_ts,
+                    "generated_at": source_generated_at
+                },
+                "end": {
+                    "cpu_ts": end_ts,
+                    "generated_at": source_generated_at
+                }
+            }
+            
+            stages.append(stage_entry)
+            
+    # Sort stages by start timestamp
+    stages.sort(key=lambda x: x['start']['cpu_ts'])
+    
+    output_data = {
+        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
+        "stages": stages,
+        "tags": {}
+    }
+    
+    with open(output_path, 'w') as f:
+        json.dump(output_data, f, indent='\t', sort_keys=True)
+        f.write('\n')
+    
+    print(f"Generated {len(stages)} stages in {output_path}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Convert Encord JSON export to project tag format.')
+    parser.add_argument('--encord', '-e', required=True, help='Path to Encord JSON file')
+    parser.add_argument('--sidecar', '-s', required=True, help='Path to video sidecar JSON file')
+    parser.add_argument('--output', '-o', help='Path to output tag file (default: tags.json in sidecar directory)')
+    
+    args = parser.parse_args()
+    
+    output_path = args.output
+    if not output_path:
+        sidecar_abs = os.path.abspath(args.sidecar)
+        sidecar_dir = os.path.dirname(sidecar_abs)
+        sidecar_filename = os.path.basename(sidecar_abs)
+        video_name = os.path.splitext(sidecar_filename)[0]
+        output_path = os.path.join(sidecar_dir, f"{video_name}_tags.json")
+    
+    convert_encord_to_tags(args.encord, args.sidecar, output_path)

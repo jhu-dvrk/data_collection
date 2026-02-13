@@ -61,6 +61,7 @@ protected:
 
     // Helper methods
     void load_config(const std::string& path);
+    void add_tag_row(const std::string& tag_name);
     void load_sidecar_json();
     void setup_pipeline();
     void do_seek(gint64 ns);
@@ -68,6 +69,10 @@ protected:
     void save_tags();
     void load_tags(const std::string& explicit_path = "");
     void load_session_tags();
+    
+    enum class MissingTagsResult { IGNORE, QUIT, ACCEPT };
+    MissingTagsResult show_missing_tags_dialog(const std::vector<std::string>& missing_tags, const std::string& source);
+    
     void update_tag_navigation_ui();
     long long frame_to_ns(long long frame);
     std::string format_time(long long ns);
@@ -87,6 +92,7 @@ protected:
     Gtk::Box m_right_vbox;
 
     Gtk::Box m_video_container; // Container for GstGtkSink widget
+    Gtk::Label m_current_stages_label;
     Gtk::Label m_info_label;
     Gtk::Label m_stats_label;
 

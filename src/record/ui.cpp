@@ -5,6 +5,9 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
+#include <ctime>
+#include <cstdio>
+#include <cstring>
 #include <gtkmm.h>
 #include <gst/gst.h>
 #include <gst/video/videooverlay.h>
@@ -363,27 +366,57 @@ MainWindow::~MainWindow() {
         Json::Value stagesArr(Json::arrayValue);
         Json::Value tagsObj(Json::objectValue);
 
+        struct timespec now;
+        clock_gettime(CLOCK_REALTIME, &now);
+        char buf[100];
+        struct tm* tm_info = localtime(&now.tv_sec);
+        strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
+        sprintf(buf + strlen(buf), ".%03ld", now.tv_nsec / 1000000);
+        std::string current_time_str = buf;
+
         // Add already recorded stages
         for (const auto& s : m_data->session_stages) {
             Json::Value stageEntry;
             stageEntry["name"] = s.name;
-            stageEntry["start"] = (Json::Value::Int64)s.start_ts;
-            stageEntry["end"] = (Json::Value::Int64)s.end_ts;
+            
+            Json::Value startObj(Json::objectValue);
+            startObj["cpu_ts"] = (Json::Value::Int64)s.start_ts;
+            startObj["generated_at"] = s.start_generated_at;
+            
+            Json::Value endObj(Json::objectValue);
+            endObj["cpu_ts"] = (Json::Value::Int64)s.end_ts;
+            endObj["generated_at"] = s.end_generated_at;
+            
+            stageEntry["start"] = startObj;
+            stageEntry["end"] = endObj;
             stagesArr.append(stageEntry);
         }
 
         // Add the current session stage if still active
         if (m_data->recording_start_cpu_ts > 0) {
-             struct timespec ts;
-             clock_gettime(CLOCK_REALTIME, &ts);
-             long long end_cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+             long long end_cpu_ts = (long long)now.tv_sec * 1000000000LL + now.tv_nsec;
+             
+             char buf_end[100];
+             struct tm* tm_info_end = localtime(&now.tv_sec);
+             strftime(buf_end, sizeof(buf_end), "%Y-%m-%dT%H:%M:%S", tm_info_end);
+             sprintf(buf_end + strlen(buf_end), ".%03ld", now.tv_nsec / 1000000);
+             std::string end_generated_at = buf_end;
 
              std::string stage_name = m_data->config_stages.empty() ? "stage" : m_data->config_stages[m_data->current_stage_idx];
 
              Json::Value stageEntry;
              stageEntry["name"] = stage_name;
-             stageEntry["start"] = (Json::Value::Int64)m_data->recording_start_cpu_ts;
-             stageEntry["end"] = (Json::Value::Int64)end_cpu_ts;
+             
+             Json::Value startObj(Json::objectValue);
+             startObj["cpu_ts"] = (Json::Value::Int64)m_data->recording_start_cpu_ts;
+             startObj["generated_at"] = m_data->recording_start_generated_at;
+             
+             Json::Value endObj(Json::objectValue);
+             endObj["cpu_ts"] = (Json::Value::Int64)end_cpu_ts;
+             endObj["generated_at"] = end_generated_at;
+             
+             stageEntry["start"] = startObj;
+             stageEntry["end"] = endObj;
              stagesArr.append(stageEntry);
         }
 
@@ -391,6 +424,7 @@ MainWindow::~MainWindow() {
             tagsObj[tag.first].append((Json::Value::Int64)tag.second);
         }
 
+        tagsRoot["generated_at"] = current_time_str;
         tagsRoot["stages"] = stagesArr;
         tagsRoot["tags"] = tagsObj;
 
@@ -573,6 +607,12 @@ void MainWindow::on_record_toggle() {
              clock_gettime(CLOCK_REALTIME, &ts);
              long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
              m_data->recording_start_cpu_ts = cpu_ts;
+
+             char buf[100];
+             struct tm* tm_info = localtime(&ts.tv_sec);
+             strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
+             sprintf(buf + strlen(buf), ".%03ld", ts.tv_nsec / 1000000);
+             m_data->recording_start_generated_at = buf;
         }
 
         if (m_data->audio_valve) {
@@ -608,9 +648,22 @@ void MainWindow::on_record_toggle() {
                  clock_gettime(CLOCK_REALTIME, &ts);
                  long long end_cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 
+                 char buf[100];
+                 struct tm* tm_info = localtime(&ts.tv_sec);
+                 strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
+                 sprintf(buf + strlen(buf), ".%03ld", ts.tv_nsec / 1000000);
+                 std::string end_generated_at = buf;
+
                  std::lock_guard<std::mutex> lock(m_data->data_mutex);
-                 m_data->session_stages.push_back({stage_name, m_data->recording_start_cpu_ts, end_cpu_ts});
+                 m_data->session_stages.push_back({
+                     stage_name, 
+                     m_data->recording_start_cpu_ts, 
+                     m_data->recording_start_generated_at,
+                     end_cpu_ts,
+                     end_generated_at
+                 });
                  m_data->recording_start_cpu_ts = 0; // Reset for next run
+                 m_data->recording_start_generated_at = "";
              }
 
              for (auto s : m_data->streams) {

@@ -269,9 +269,19 @@ def main():
         stage_counts = {}
         for stage in tags_data.get("stages", []):
             name = stage["name"]
+            
+            # Support both flat and nested objects
+            start_val = stage.get("start")
+            if isinstance(start_val, dict):
+                start_val = start_val.get("cpu_ts")
+                
+            end_val = stage.get("end")
+            if isinstance(end_val, dict):
+                end_val = end_val.get("cpu_ts")
+                
             stage_counts[name] = stage_counts.get(name, 0) + 1
             dir_name = f"{name}_{stage_counts[name]:03d}"
-            extraction_targets.append({"name": dir_name, "start": stage["start"], "end": stage["end"]})
+            extraction_targets.append({"name": dir_name, "start": start_val, "end": end_val})
 
     for target in extraction_targets:
         target_dir = os.path.join(base_extracted_dir, target["name"])

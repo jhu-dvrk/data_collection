@@ -8,6 +8,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <ctime>
+#include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include "config.hpp"
 
 TagWindow::TagWindow(const std::string& video, const std::string& config, const std::string& tags_file, bool load_session_tags)
@@ -36,6 +40,11 @@ TagWindow::TagWindow(const std::string& video, const std::string& config, const 
     m_main_hbox.pack_start(m_right_vbox, Gtk::PACK_SHRINK);
 
     // Left Side: Video
+    m_current_stages_label.set_margin_bottom(5);
+    m_current_stages_label.set_line_wrap(true);
+    m_current_stages_label.set_justify(Gtk::JUSTIFY_CENTER);
+    m_left_vbox.pack_start(m_current_stages_label, Gtk::PACK_SHRINK);
+
     m_video_container.set_size_request(800, 450);
     m_left_vbox.pack_start(m_video_container, Gtk::PACK_EXPAND_WIDGET);
 
@@ -151,6 +160,36 @@ TagWindow::~TagWindow() {
     }
 }
 
+void TagWindow::add_tag_row(const std::string& tag_name) {
+    if (m_tag_buttons.count(tag_name)) return;
+
+    auto* btn = Gtk::make_managed<Gtk::ToggleButton>(tag_name);
+    btn->set_hexpand(true);
+    btn->set_margin_top(1);
+    btn->set_margin_bottom(1);
+    m_tags_grid.attach(*btn, 0, m_grid_row_count, 1, 1);
+    m_tag_buttons[tag_name] = btn;
+    btn->signal_clicked().connect([this, tag_name](){ on_tag_toggle(tag_name); });
+
+    auto* count_lbl = Gtk::make_managed<Gtk::Label>("0");
+    count_lbl->set_width_chars(3);
+    count_lbl->set_margin_top(1);
+    count_lbl->set_margin_bottom(1);
+    m_tags_grid.attach(*count_lbl, 1, m_grid_row_count, 1, 1);
+    m_tag_count_labels[tag_name] = count_lbl;
+
+    auto* combo = Gtk::make_managed<Gtk::ComboBoxText>();
+    combo->set_no_show_all(true);
+    combo->hide();
+    combo->set_margin_top(1);
+    combo->set_margin_bottom(1);
+    m_tags_grid.attach(*combo, 2, m_grid_row_count, 1, 1);
+    m_tag_combos[tag_name] = combo;
+    combo->signal_changed().connect([this, tag_name](){ on_tag_jump(tag_name); });
+
+    m_grid_row_count++;
+}
+
 void TagWindow::load_config(const std::string& path) {
     if (path.empty()) return;
 
@@ -159,43 +198,15 @@ void TagWindow::load_config(const std::string& path) {
 
     dc::AppConfig cfg = dc::Config::parse_app_config(root);
 
-    auto add_row = [this](const std::string& tag_name){
-        auto* btn = Gtk::make_managed<Gtk::ToggleButton>(tag_name);
-        btn->set_hexpand(true);
-        btn->set_margin_top(1);
-        btn->set_margin_bottom(1);
-        m_tags_grid.attach(*btn, 0, m_grid_row_count, 1, 1);
-        m_tag_buttons[tag_name] = btn;
-        btn->signal_clicked().connect([this, tag_name](){ on_tag_toggle(tag_name); });
-
-        auto* count_lbl = Gtk::make_managed<Gtk::Label>("0");
-        count_lbl->set_width_chars(3);
-        count_lbl->set_margin_top(1);
-        count_lbl->set_margin_bottom(1);
-        m_tags_grid.attach(*count_lbl, 1, m_grid_row_count, 1, 1);
-        m_tag_count_labels[tag_name] = count_lbl;
-
-        auto* combo = Gtk::make_managed<Gtk::ComboBoxText>();
-        combo->set_no_show_all(true);
-        combo->hide();
-        combo->set_margin_top(1);
-        combo->set_margin_bottom(1);
-        m_tags_grid.attach(*combo, 2, m_grid_row_count, 1, 1);
-        m_tag_combos[tag_name] = combo;
-        combo->signal_changed().connect([this, tag_name](){ on_tag_jump(tag_name); });
-
-        m_grid_row_count++;
-    };
-
     for (const auto& s : cfg.stages) {
         m_data.stages.push_back(s);
-        add_row(s + "_start");
-        add_row(s + "_end");
+        add_tag_row(s + "_start");
+        add_tag_row(s + "_end");
     }
 
     for (const auto& t : cfg.tags) {
         m_data.tags.push_back(t);
-        add_row(t);
+        add_tag_row(t);
     }
     m_tags_grid.show_all();
 }
@@ -532,6 +543,37 @@ bool TagWindow::on_ui_update_timer() {
             m_frame_slider.set_value(frame);
             m_frame_label.set_text(std::to_string(frame) + " / " + std::to_string(m_data.total_frames));
 
+            // Update current stages label
+            std::map<std::string, int> starts;
+            std::map<std::string, int> ends;
+            for (auto const& [f, tags] : m_data.frame_tags) {
+                if (f > frame) break;
+                for (const auto& t : tags) {
+                    if (t.size() > 6 && t.compare(t.size() - 6, 6, "_start") == 0) {
+                        starts[t.substr(0, t.size() - 6)]++;
+                    } else if (t.size() > 4 && t.compare(t.size() - 4, 4, "_end") == 0) {
+                        ends[t.substr(0, t.size() - 4)]++;
+                    }
+                }
+            }
+
+            std::string active_stages_str = "";
+            for (auto const& [name, count] : starts) {
+                int end_count = ends[name];
+                if (count > end_count) {
+                    for (int i = end_count + 1; i <= count; ++i) {
+                        if (!active_stages_str.empty()) active_stages_str += ", ";
+                        active_stages_str += name + " (" + std::to_string(i) + ")";
+                    }
+                }
+            }
+
+            if (active_stages_str.empty()) {
+                m_current_stages_label.set_markup("<i>No active stages</i>");
+            } else {
+                m_current_stages_label.set_markup("<b>Current Stages: " + active_stages_str + "</b>");
+            }
+
             // Update tag buttons state for this frame
             for (auto const& [name, btn] : m_tag_buttons) {
                 auto const& tags = m_data.frame_tags[frame];
@@ -652,6 +694,14 @@ void TagWindow::save_tags() {
         }
     }
 
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    char buf[100];
+    struct tm* tm_info = localtime(&now.tv_sec);
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
+    std::sprintf(buf + std::strlen(buf), ".%03ld", now.tv_nsec / 1000000);
+    std::string current_time_str = buf;
+
     for (auto const& [name, stage] : stage_map) {
         if (stage.start != -1 && stage.end != -1) {
             Json::Value stage_entry;
@@ -668,8 +718,16 @@ void TagWindow::save_tags() {
                 m_info_label.set_text(error_msg);
             }
 
-            stage_entry["start"] = get_ts(s_frame);
-            stage_entry["end"] = get_ts(e_frame);
+            Json::Value start_obj;
+            start_obj["cpu_ts"] = get_ts(s_frame);
+            start_obj["generated_at"] = current_time_str;
+            
+            Json::Value end_obj;
+            end_obj["cpu_ts"] = get_ts(e_frame);
+            end_obj["generated_at"] = current_time_str;
+
+            stage_entry["start"] = start_obj;
+            stage_entry["end"] = end_obj;
             stages_array.append(stage_entry);
         } else {
             std::string status = (stage.start == -1) ? "missing start" : "missing end";
@@ -681,6 +739,7 @@ void TagWindow::save_tags() {
 
     root["stages"] = stages_array;
     root["tags"] = tags_obj;
+    root["generated_at"] = current_time_str;
 
     std::ofstream ofs(tags_file);
     Json::StreamWriterBuilder builder;
@@ -722,11 +781,53 @@ void TagWindow::load_tags(const std::string& explicit_path) {
         else return std::distance(m_data.frame_cpu_timestamps.begin(), it - 1);
     };
 
+    std::vector<std::string> missing_tags;
+    std::vector<std::string> stages_to_add;
+    std::vector<std::string> tags_to_add;
+
     if (root.isMember("stages")) {
         for (auto& s : root["stages"]) {
             std::string name = s["name"].asString();
-            long long start = find_frame(s["start"].asInt64());
-            long long end = find_frame(s["end"].asInt64());
+            if (m_tag_buttons.count(name + "_start") == 0 || m_tag_buttons.count(name + "_end") == 0) {
+                missing_tags.push_back(name + " (stage)");
+                stages_to_add.push_back(name);
+            }
+        }
+    }
+    if (root.isMember("tags")) {
+        for (auto const& name : root["tags"].getMemberNames()) {
+            if (m_tag_buttons.count(name) == 0) {
+                missing_tags.push_back(name);
+                tags_to_add.push_back(name);
+            }
+        }
+    }
+
+    MissingTagsResult res = MissingTagsResult::IGNORE;
+    if (!missing_tags.empty()) {
+        res = show_missing_tags_dialog(missing_tags, tags_file);
+        if (res == MissingTagsResult::ACCEPT) {
+            for (const auto& s : stages_to_add) {
+                add_tag_row(s + "_start");
+                add_tag_row(s + "_end");
+            }
+            for (const auto& t : tags_to_add) {
+                add_tag_row(t);
+            }
+            m_tags_grid.show_all();
+        }
+    }
+
+    if (root.isMember("stages")) {
+        for (auto& s : root["stages"]) {
+            std::string name = s["name"].asString();
+            if (m_tag_buttons.count(name + "_start") == 0 || m_tag_buttons.count(name + "_end") == 0) continue;
+
+            long long start_ts = s["start"].isObject() ? s["start"]["cpu_ts"].asInt64() : s["start"].asInt64();
+            long long end_ts = s["end"].isObject() ? s["end"]["cpu_ts"].asInt64() : s["end"].asInt64();
+
+            long long start = find_frame(start_ts);
+            long long end = find_frame(end_ts);
             m_data.frame_tags[start].push_back(name + "_start");
             m_data.frame_tags[end].push_back(name + "_end");
         }
@@ -734,12 +835,44 @@ void TagWindow::load_tags(const std::string& explicit_path) {
 
     if (root.isMember("tags")) {
         for (auto const& name : root["tags"].getMemberNames()) {
+            if (m_tag_buttons.count(name) == 0) continue;
             for (auto& f : root["tags"][name]) {
                 m_data.frame_tags[find_frame(f.asInt64())].push_back(name);
             }
         }
     }
-    m_info_label.set_markup("Loaded tags from <b>" + tags_file + "</b>");
+
+    if (!missing_tags.empty()) {
+        std::string inf = (res == MissingTagsResult::ACCEPT) ? " (new tags added)" : " (some tags ignored)";
+        m_info_label.set_markup("Loaded tags from <b>" + tags_file + "</b>" + inf);
+    } else {
+        m_info_label.set_markup("Loaded tags from <b>" + tags_file + "</b>");
+    }
+}
+
+TagWindow::MissingTagsResult TagWindow::show_missing_tags_dialog(const std::vector<std::string>& missing_tags, const std::string& source) {
+    if (missing_tags.empty()) return MissingTagsResult::IGNORE;
+
+    std::string message = "Tags found in " + source + " but not in config:\n";
+    for (size_t i = 0; i < missing_tags.size(); ++i) {
+        message += " • " + missing_tags[i] + "\n";
+        if (i > 15) {
+            message += " ... and " + std::to_string(missing_tags.size() - i - 1) + " more";
+            break;
+        }
+    }
+
+    Gtk::MessageDialog dialog(*this, "Missing Tags", false, Gtk::MESSAGE_ERROR, Gtk::BUTTONS_NONE, true);
+    dialog.set_secondary_text(message);
+    dialog.add_button("Accept", (int)MissingTagsResult::ACCEPT);
+    dialog.add_button("Ignore", (int)MissingTagsResult::IGNORE);
+    dialog.add_button("Quit", (int)MissingTagsResult::QUIT);
+
+    int result = dialog.run();
+    if (result == (int)MissingTagsResult::QUIT) {
+        std::exit(0);
+    }
+    return (MissingTagsResult)result;
 }
 
 void TagWindow::load_session_tags() {
@@ -787,12 +920,53 @@ void TagWindow::load_session_tags() {
     };
 
     int count = 0;
+    std::vector<std::string> missing_tags;
+    std::vector<std::string> stages_to_add;
+    std::vector<std::string> tags_to_add;
+
     if (root.isMember("stages")) {
         for (auto& s : root["stages"]) {
             std::string name = s["name"].asString();
+            if (m_tag_buttons.count(name + "_start") == 0 || m_tag_buttons.count(name + "_end") == 0) {
+                missing_tags.push_back(name + " (stage)");
+                stages_to_add.push_back(name);
+            }
+        }
+    }
+    if (root.isMember("tags")) {
+        for (auto const& name : root["tags"].getMemberNames()) {
+            if (m_tag_buttons.count(name) == 0) {
+                missing_tags.push_back(name);
+                tags_to_add.push_back(name);
+            }
+        }
+    }
 
-            long long start_frame = find_frame(s["start"].asInt64());
-            long long end_frame = find_frame(s["end"].asInt64());
+    MissingTagsResult res = MissingTagsResult::IGNORE;
+    if (!missing_tags.empty()) {
+        res = show_missing_tags_dialog(missing_tags, "session file (" + tags_json + ")");
+        if (res == MissingTagsResult::ACCEPT) {
+            for (const auto& s : stages_to_add) {
+                add_tag_row(s + "_start");
+                add_tag_row(s + "_end");
+            }
+            for (const auto& t : tags_to_add) {
+                add_tag_row(t);
+            }
+            m_tags_grid.show_all();
+        }
+    }
+
+    if (root.isMember("stages")) {
+        for (auto& s : root["stages"]) {
+            std::string name = s["name"].asString();
+            if (m_tag_buttons.count(name + "_start") == 0 || m_tag_buttons.count(name + "_end") == 0) continue;
+
+            long long start_ts = s["start"].isObject() ? s["start"]["cpu_ts"].asInt64() : s["start"].asInt64();
+            long long end_ts = s["end"].isObject() ? s["end"]["cpu_ts"].asInt64() : s["end"].asInt64();
+
+            long long start_frame = find_frame(start_ts);
+            long long end_frame = find_frame(end_ts);
             if (start_frame != -1) {
                 m_data.frame_tags[start_frame].push_back(name + "_start");
                 count++;
@@ -806,6 +980,7 @@ void TagWindow::load_session_tags() {
 
     if (root.isMember("tags")) {
         for (auto const& name : root["tags"].getMemberNames()) {
+            if (m_tag_buttons.count(name) == 0) continue;
             for (auto& t : root["tags"][name]) {
                 long long frame = find_frame(t.asInt64());
                 if (frame != -1) {
@@ -815,6 +990,7 @@ void TagWindow::load_session_tags() {
             }
         }
     }
+
     std::cout << "Successfully loaded " << count << " entries from session tags." << std::endl;
     std::string current_info = m_info_label.get_text();
     m_info_label.set_text(current_info + " | Session tags: " + std::to_string(count));

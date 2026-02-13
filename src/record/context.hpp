@@ -82,7 +82,9 @@ struct AppData {
     struct StageEvent {
         std::string name;
         long long start_ts;
+        std::string start_generated_at;
         long long end_ts;
+        std::string end_generated_at;
     };
     std::vector<StageEvent> session_stages;
     std::vector<std::string> config_stages;
@@ -92,6 +94,7 @@ struct AppData {
     int session_stage_cycle_count;
     int current_stage_idx; // Track the current stage index for UI highlighting
     long long recording_start_cpu_ts;
+    std::string recording_start_generated_at;
     bool global_recording, blink_state, session_initialized, audio_is_recording, is_quitting;
     bool enable_audio;
     int eos_received_count;
