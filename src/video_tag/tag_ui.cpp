@@ -13,8 +13,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include "config.hpp"
+#include "tags.hpp"
 
-TagWindow::TagWindow(const std::string& video, const std::string& config, const std::string& tags_file, bool load_session_tags)
+TagWindow::TagWindow(const std::string& video, const std::string&config, const std::string& tags_file, bool load_session_tags)
     : m_main_hbox(Gtk::ORIENTATION_HORIZONTAL, 10),
       m_left_vbox(Gtk::ORIENTATION_VERTICAL, 5),
       m_right_vbox(Gtk::ORIENTATION_VERTICAL, 5),
@@ -694,13 +695,7 @@ void TagWindow::save_tags() {
         }
     }
 
-    struct timespec now;
-    clock_gettime(CLOCK_REALTIME, &now);
-    char buf[100];
-    struct tm* tm_info = localtime(&now.tv_sec);
-    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
-    std::sprintf(buf + std::strlen(buf), ".%03ld", now.tv_nsec / 1000000);
-    std::string current_time_str = buf;
+    std::string current_time_str = dc::get_current_timestamp_iso8601();
 
     for (auto const& [name, stage] : stage_map) {
         if (stage.start != -1 && stage.end != -1) {
@@ -823,8 +818,8 @@ void TagWindow::load_tags(const std::string& explicit_path) {
             std::string name = s["name"].asString();
             if (m_tag_buttons.count(name + "_start") == 0 || m_tag_buttons.count(name + "_end") == 0) continue;
 
-            long long start_ts = s["start"].isObject() ? s["start"]["cpu_ts"].asInt64() : s["start"].asInt64();
-            long long end_ts = s["end"].isObject() ? s["end"]["cpu_ts"].asInt64() : s["end"].asInt64();
+            long long start_ts = dc::parse_stage_timestamp(s["start"]);
+            long long end_ts = dc::parse_stage_timestamp(s["end"]);
 
             long long start = find_frame(start_ts);
             long long end = find_frame(end_ts);
@@ -962,8 +957,8 @@ void TagWindow::load_session_tags() {
             std::string name = s["name"].asString();
             if (m_tag_buttons.count(name + "_start") == 0 || m_tag_buttons.count(name + "_end") == 0) continue;
 
-            long long start_ts = s["start"].isObject() ? s["start"]["cpu_ts"].asInt64() : s["start"].asInt64();
-            long long end_ts = s["end"].isObject() ? s["end"]["cpu_ts"].asInt64() : s["end"].asInt64();
+            long long start_ts = dc::parse_stage_timestamp(s["start"]);
+            long long end_ts = dc::parse_stage_timestamp(s["end"]);
 
             long long start_frame = find_frame(start_ts);
             long long end_frame = find_frame(end_ts);

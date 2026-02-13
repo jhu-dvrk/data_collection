@@ -9,12 +9,12 @@ The application also integrates with ROS2 for remote control and status monitori
 *   **ROS2**: The application is a ROS2 node and requires a working ROS2 installation (Humble, Jazzy, etc.).
 *   **System Dependencies**:
     ```bash
-    sudo apt install libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-plugins-base-apps python3-opencv python3-numpy python3-pyqt5 python3-pyqt5.qtmultimedia libqt5multimedia5-plugins libgtkmm-3.0-dev
+    sudo apt install libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools gstreamer1.0-plugins-base-apps python3-opencv python3-numpy libgtkmm-3.0-dev libjsoncpp-dev
     ```
 *   **Python Dependencies**:
     - `GStreamer (gi)`: Core pipeline handling for video extraction.
-    - `argparse`, `json`, `signal`: Standard libraries for configuration and signal handling.
-    - `opencv-python`: Used by the extract for image processing.
+    - `opencv-python`: Used by the extract and post-processing scripts.
+    - `rclpy`, `rosbag2_py`: For ROS 2 integration and bag processing.
 
 ## NVIDIA Hardware Acceleration
 
@@ -187,6 +187,24 @@ The `video_tag` C++ application is designed for post-recording data curation. It
 ```bash
 ros2 run data_collection video_tag -v video.mp4 -c config.json
 ```
+
+**Features**:
+- **Frame-Accurate Navigation**: Seek by time or frame number with exact visualization.
+- **Stage Support**: Labels defined in the config are automatically shown as toggleable ranges.
+- **Tag Search**: Jump quickly between frame tags using dropdown menus.
+- **Missing Tag Validation**: Automatically detects tags in the JSON file that are missing from the current configuration and asks to "Accept" them.
+- **Speed Control**: Variable playback speeds (0.1x to 2.0x).
+- **Session Sync**: Can automatically load tags from the session's `tags.json` to overlay existing annotations.
+
+### 7. Encord Integration
+
+The `encord_to_tags` script allows importing labels from the Encord platform into the project's native tag format.
+
+```bash
+ros2 run data_collection encord_to_tags --encord path/to/encord.json --sidecar path/to/video_sidecar.json
+```
+
+This ensures that cloud-based annotations can be used seamlessly with the local extraction and curation tools.
 
 ## ROS2 Integration
 

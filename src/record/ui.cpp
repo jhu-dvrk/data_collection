@@ -1,6 +1,7 @@
 #include "ui.hpp"
 #include "pipeline.hpp"
 #include "ros_node.hpp"
+#include "tags.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -368,11 +369,7 @@ MainWindow::~MainWindow() {
 
         struct timespec now;
         clock_gettime(CLOCK_REALTIME, &now);
-        char buf[100];
-        struct tm* tm_info = localtime(&now.tv_sec);
-        strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
-        sprintf(buf + strlen(buf), ".%03ld", now.tv_nsec / 1000000);
-        std::string current_time_str = buf;
+        std::string current_time_str = dc::get_current_timestamp_iso8601();
 
         // Add already recorded stages
         for (const auto& s : m_data->session_stages) {
@@ -395,12 +392,7 @@ MainWindow::~MainWindow() {
         // Add the current session stage if still active
         if (m_data->recording_start_cpu_ts > 0) {
              long long end_cpu_ts = (long long)now.tv_sec * 1000000000LL + now.tv_nsec;
-             
-             char buf_end[100];
-             struct tm* tm_info_end = localtime(&now.tv_sec);
-             strftime(buf_end, sizeof(buf_end), "%Y-%m-%dT%H:%M:%S", tm_info_end);
-             sprintf(buf_end + strlen(buf_end), ".%03ld", now.tv_nsec / 1000000);
-             std::string end_generated_at = buf_end;
+             std::string end_generated_at = dc::get_current_timestamp_iso8601();
 
              std::string stage_name = m_data->config_stages.empty() ? "stage" : m_data->config_stages[m_data->current_stage_idx];
 
@@ -607,12 +599,7 @@ void MainWindow::on_record_toggle() {
              clock_gettime(CLOCK_REALTIME, &ts);
              long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
              m_data->recording_start_cpu_ts = cpu_ts;
-
-             char buf[100];
-             struct tm* tm_info = localtime(&ts.tv_sec);
-             strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
-             sprintf(buf + strlen(buf), ".%03ld", ts.tv_nsec / 1000000);
-             m_data->recording_start_generated_at = buf;
+             m_data->recording_start_generated_at = dc::get_current_timestamp_iso8601();
         }
 
         if (m_data->audio_valve) {
@@ -647,12 +634,7 @@ void MainWindow::on_record_toggle() {
                  struct timespec ts;
                  clock_gettime(CLOCK_REALTIME, &ts);
                  long long end_cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-
-                 char buf[100];
-                 struct tm* tm_info = localtime(&ts.tv_sec);
-                 strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm_info);
-                 sprintf(buf + strlen(buf), ".%03ld", ts.tv_nsec / 1000000);
-                 std::string end_generated_at = buf;
+                 std::string end_generated_at = dc::get_current_timestamp_iso8601();
 
                  std::lock_guard<std::mutex> lock(m_data->data_mutex);
                  m_data->session_stages.push_back({

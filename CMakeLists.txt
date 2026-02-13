@@ -27,6 +27,7 @@ pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 # Common Library: data_collection
 add_library(data_collection_lib
   src/common/config.cpp
+  src/common/tags.cpp
 )
 target_include_directories(data_collection_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/common>

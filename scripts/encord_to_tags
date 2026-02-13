@@ -2,6 +2,14 @@
 import json
 import argparse
 import os
+from datetime import datetime
+try:
+    from data_collection.common import get_current_timestamp_iso8601
+except ImportError:
+    # Fallback if not installed/importable
+    def get_current_timestamp_iso8601(dt=None):
+        if dt is None: dt = datetime.now()
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
 
 def convert_encord_to_tags(encord_path, sidecar_path, output_path):
     print(f"Loading Encord file: {encord_path}")
@@ -28,14 +36,13 @@ def convert_encord_to_tags(encord_path, sidecar_path, output_path):
     
     classification_answers = encord_data.get('classification_answers', {})
     
-    from datetime import datetime
     def reformat_date(date_str):
         if not date_str:
             return None
         try:
             # Encord format: "Thu, 12 Feb 2026 20:14:47 GMT"
             dt = datetime.strptime(date_str, "%a, %d %b %Y %H:%M:%S %Z")
-            return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+            return get_current_timestamp_iso8601(dt)
         except:
             return date_str
 
@@ -85,7 +92,7 @@ def convert_encord_to_tags(encord_path, sidecar_path, output_path):
     stages.sort(key=lambda x: x['start']['cpu_ts'])
     
     output_data = {
-        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
+        "generated_at": get_current_timestamp_iso8601(),
         "stages": stages,
         "tags": {}
     }

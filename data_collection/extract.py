@@ -14,6 +14,7 @@ import re
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 from rosidl_runtime_py.convert import message_to_ordereddict
+from .common import parse_stage_timestamp
 
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower()
@@ -271,13 +272,8 @@ def main():
             name = stage["name"]
             
             # Support both flat and nested objects
-            start_val = stage.get("start")
-            if isinstance(start_val, dict):
-                start_val = start_val.get("cpu_ts")
-                
-            end_val = stage.get("end")
-            if isinstance(end_val, dict):
-                end_val = end_val.get("cpu_ts")
+            start_val = parse_stage_timestamp(stage.get("start"))
+            end_val = parse_stage_timestamp(stage.get("end"))
                 
             stage_counts[name] = stage_counts.get(name, 0) + 1
             dir_name = f"{name}_{stage_counts[name]:03d}"
