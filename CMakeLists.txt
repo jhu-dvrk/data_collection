@@ -16,6 +16,8 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(image_transport REQUIRED)
+find_package(camera_info_manager REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
 
@@ -52,6 +54,8 @@ ament_target_dependencies(record
   rclcpp
   std_msgs
   sensor_msgs
+  image_transport
+  camera_info_manager
   rosbag2_cpp
 )
 target_include_directories(record PRIVATE

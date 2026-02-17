@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include <json/json.h>
 
 namespace dc {
@@ -18,19 +19,22 @@ struct VideoEncoding {
 
 struct VideoConfig {
     std::string name;
-    std::string stream;
+    std::string stream;record
     VideoEncoding encoding;
     bool record = true;
     bool timestamp_overlay = false;
+    bool tee_glimage_sink = false;
+    std::string ros_camera_name = "";
 };
 
 struct AppConfig {
     std::string data_directory = ".";
-    bool enable_audio = false;
+    bool record_audio = false;
     std::vector<VideoConfig> videos;
     std::vector<std::string> stages;
     std::vector<std::string> tags;
     std::vector<std::string> ros_topics;
+    std::vector<std::string> configuration_files;
 };
 
 class Config {
@@ -38,6 +42,16 @@ public:
     static bool load_from_file(const std::string& path, Json::Value& root);
     static std::vector<VideoConfig> parse_videos(const Json::Value& root);
     static AppConfig parse_app_config(const Json::Value& root);
+
+    /// Recursively load a config and all its configuration_files references.
+    /// @param path       Absolute or relative path to the JSON file
+    /// @param master_dir Directory of the top-level config (fallback for relative paths)
+    /// @param visited    Set of resolved paths already loaded (cycle detection)
+    /// @param out        Accumulated list of AppConfig objects
+    static bool load_recursive(const std::string& path,
+                               const std::string& master_dir,
+                               std::set<std::string>& visited,
+                               std::vector<AppConfig>& out);
 
     // Helper to generate a GStreamer caps string from the encoding
     static std::string make_caps_string(const VideoEncoding& enc);

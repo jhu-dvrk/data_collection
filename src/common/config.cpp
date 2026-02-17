@@ -1,6 +1,9 @@
 #include "config.hpp"
 #include <fstream>
 #include <iostream>
+#include <set>
+#include <climits>
+#include <cstdlib>
 
 namespace dc {
 
@@ -31,6 +34,8 @@ std::vector<VideoConfig> Config::parse_videos(const Json::Value& root) {
         if (v.isMember("stream")) cfg.stream = v["stream"].asString();
         if (v.isMember("record")) cfg.record = v["record"].asBool();
         if (v.isMember("timestamp_overlay")) cfg.timestamp_overlay = v["timestamp_overlay"].asBool();
+        if (v.isMember("tee_glimage_sink")) cfg.tee_glimage_sink = v["tee_glimage_sink"].asBool();
+        if (v.isMember("ros_camera_name")) cfg.ros_camera_name = v["ros_camera_name"].asString();
 
         if (v.isMember("encoding")) {
             const auto& enc = v["encoding"];
@@ -50,7 +55,7 @@ std::vector<VideoConfig> Config::parse_videos(const Json::Value& root) {
 AppConfig Config::parse_app_config(const Json::Value& root) {
     AppConfig cfg;
     cfg.data_directory = root.get("data_directory", ".").asString();
-    cfg.enable_audio = root.get("enable_audio", false).asBool();
+    cfg.record_audio = root.get("record_audio", false).asBool();
 
     cfg.videos = parse_videos(root);
 
@@ -63,7 +68,54 @@ AppConfig Config::parse_app_config(const Json::Value& root) {
     if (root.isMember("ros_topics")) {
         for (const auto& t : root["ros_topics"]) cfg.ros_topics.push_back(t.asString());
     }
+    if (root.isMember("configuration_files")) {
+        for (const auto& f : root["configuration_files"]) cfg.configuration_files.push_back(f.asString());
+    }
     return cfg;
+}
+
+bool Config::load_recursive(const std::string& path,
+                            const std::string& master_dir,
+                            std::set<std::string>& visited,
+                            std::vector<AppConfig>& out) {
+    // Resolve to absolute path for cycle detection
+    char resolved[PATH_MAX];
+    const char* abs = realpath(path.c_str(), resolved);
+    std::string abs_path = abs ? std::string(abs) : path;
+
+    if (!visited.insert(abs_path).second) {
+        // Already loaded — skip silently (not an error)
+        return true;
+    }
+
+    Json::Value root;
+    if (!load_from_file(abs_path, root)) {
+        return false;
+    }
+
+    AppConfig cfg = parse_app_config(root);
+
+    // Determine the directory of this config file for relative path resolution
+    std::string config_dir = abs_path;
+    auto slash = config_dir.rfind('/');
+    if (slash != std::string::npos) config_dir = config_dir.substr(0, slash);
+    else config_dir = ".";
+
+    // Recursively load referenced configuration files
+    for (const auto& ref : cfg.configuration_files) {
+        // Try relative to this config's directory first, then master_dir
+        std::string candidate = config_dir + "/" + ref;
+        std::ifstream test(candidate);
+        if (!test.good()) {
+            candidate = master_dir + "/" + ref;
+        }
+        if (!load_recursive(candidate, master_dir, visited, out)) {
+            return false;
+        }
+    }
+
+    out.push_back(std::move(cfg));
+    return true;
 }
 
 std::string Config::make_caps_string(const VideoEncoding& enc) {

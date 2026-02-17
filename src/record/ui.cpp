@@ -15,6 +15,22 @@
 #include <gdk/gdkx.h>
 #include <rclcpp/rclcpp.hpp>
 
+// Undefine X11 macros that clash with ROS/Qt/standard names
+#ifdef Bool
+#undef Bool
+#endif
+#ifdef Status
+#undef Status
+#endif
+#ifdef True
+#undef True
+#endif
+#ifdef False
+#undef False
+#endif
+
+#include <std_msgs/msg/bool.hpp>
+
 static MainWindow* g_main_window_instance = nullptr;
 
 // C-compatible callback for ROS node
@@ -675,6 +691,14 @@ void MainWindow::on_record_toggle() {
     }
 
     m_record_button.set_label(m_data->global_recording ? "Stop Recording" : "Start Recording");
+
+    // Publish current recording state
+    if (m_data->node && m_data->pub_recording) {
+        auto msg = std::make_unique<std_msgs::msg::Bool>();
+        msg->data = m_data->global_recording;
+        m_data->pub_recording->publish(std::move(msg));
+    }
+
     m_audio_enable_check.set_sensitive(!m_data->global_recording);
     m_audio_src_combo.set_sensitive(!m_data->global_recording);
     for (auto s : m_data->streams) {

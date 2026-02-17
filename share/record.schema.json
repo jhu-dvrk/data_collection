@@ -8,15 +8,16 @@
             "items": {
                 "type": "string"
             },
-            "description": "List of additional configuration files to load and merge. Paths are resolved relative to the current config file's directory, with fallback to the master config file's directory."
+            "description": "List of additional configuration files to load and merge. Paths are resolved relative to the current config file's directory, with fallback to the master config file's directory. Circular references are detected and skipped."
         },
         "data_directory": {
             "type": "string",
-            "description": "Directory where recorded videos will be saved"
+            "description": "Directory where recorded sessions will be saved",
+            "default": "."
         },
         "record_audio": {
             "type": "boolean",
-            "description": "Whether to record audio from the default microphone by default. Merged via logical OR across configuration files.",
+            "description": "Whether to record audio from the default microphone. Merged via logical OR across configuration files.",
             "default": false
         },
         "ros_topics": {
@@ -24,14 +25,21 @@
             "items": {
                 "type": "string"
             },
-            "description": "List of ROS topics to be recorded in the bag file"
+            "description": "List of ROS 2 topics to record in a rosbag alongside the video files"
         },
         "stages": {
             "type": "array",
             "items": {
                 "type": "string"
             },
-            "description": "Optional list of stages to sequence recordings"
+            "description": "Optional ordered list of stages to sequence recordings"
+        },
+        "tags": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Optional list of event tag names that can be applied during recording"
         },
         "videos": {
             "type": "array",
@@ -44,56 +52,61 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Name of the video stream"
+                        "description": "Display name of the video stream"
                     },
                     "stream": {
                         "type": "string",
-                        "description": "GStreamer source description string"
+                        "description": "GStreamer source pipeline description (e.g. 'v4l2src device=/dev/video0')"
                     },
                     "record": {
                         "type": "boolean",
-                        "description": "Whether to record this stream by default",
+                        "description": "Whether to record this stream to an MP4 file",
                         "default": true
                     },
                     "timestamp_overlay": {
                         "type": "boolean",
-                        "description": "Whether to burn GStreamer timestamps into the video by default",
+                        "description": "Whether to burn GStreamer and wall-clock timestamps into the video preview",
                         "default": false
+                    },
+                    "ros_camera_name": {
+                        "type": "string",
+                        "description": "If set, the video stream is also published as a ROS 2 image topic using image_transport. The value becomes the base topic name: <ros_camera_name>/image_raw and <ros_camera_name>/camera_info are published."
                     },
                     "tee_glimage_sink": {
                         "type": "boolean",
-                        "description": "Whether to add a separate glimagesink window before timestamp overlays (useful for fullscreen preview without overlays)",
+                        "description": "If true, adds a separate glimagesink window with free aspect ratio right after the source, before timestamp overlays and recording.",
                         "default": false
                     },
                     "encoding": {
                         "type": "object",
+                        "description": "H.264 encoding parameters for the recorded MP4 file",
                         "properties": {
                             "bitrate": {
                                 "type": "integer",
-                                "description": "Bitrate in bits per second (optional)",
+                                "description": "Bitrate in kbps",
                                 "default": 10000
                             },
                             "speed_preset": {
                                 "type": "integer",
-                                "description": "x264 speed preset (1-10) (optional). Lower is faster encoding, lower quality.",
+                                "description": "x264 speed preset (1-10). Lower is faster encoding, lower quality.",
                                 "default": 5
                             },
                             "key_int_max": {
                                 "type": "integer",
-                                "description": "Maximum keyframe interval (optional)",
-                                "default": 20
+                                "description": "Maximum keyframe interval",
+                                "default": 30
                             },
                             "frame_rate": {
                                 "type": "integer",
-                                "description": "Target frame rate for recording (optional)"
+                                "description": "Target frame rate for recording"
                             },
                             "width": {
                                 "type": "integer",
-                                "description": "Target width for recording (optional)"
+                                "description": "Target width for recording"
                             },
                             "height": {
                                 "type": "integer",
-                                "description": "Target height for recording (optional)"
+                                "description": "Target height for recording"
                             }
                         }
                     }

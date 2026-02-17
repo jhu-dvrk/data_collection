@@ -5,11 +5,14 @@
 #include <thread>
 #include <ctime>
 #include <unordered_set>
+#include <climits>
+#include <set>
 
 #include <gtkmm.h>
 #include <gst/gst.h>
 #include <json/json.h>
 #include <rclcpp/rclcpp.hpp>
+#include <rosbag2_cpp/writer.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <glib-unix.h>
 
@@ -85,36 +88,59 @@ int main(int argc, char *argv[]) {
     // ROS 2 Initialization
     rclcpp::init(argc, argv);
     data.node = std::make_shared<rclcpp::Node>("record_c");
-    if (!data.trigger_topic.empty()) {
-        data.sub_record = data.node->create_subscription<std_msgs::msg::Bool>(
-            data.trigger_topic, 10,
-            [&](const std_msgs::msg::Bool::SharedPtr msg) { ros_record_callback(msg, &data); }
-        );
-        std::cout << "Subscribed to trigger topic: " << data.trigger_topic << std::endl;
+    data.it = std::make_shared<image_transport::ImageTransport>(data.node);
+    data.pub_recording = data.node->create_publisher<std_msgs::msg::Bool>("record/recording", 10);
+
+    if (data.trigger_topic.empty()) {
+        data.trigger_topic = "record/record";
     }
 
+    // Remove leading slashes if any to keep them relative
+    while (!data.trigger_topic.empty() && data.trigger_topic[0] == '/') data.trigger_topic.erase(0, 1);
+
+    data.sub_record = data.node->create_subscription<std_msgs::msg::Bool>(
+        data.trigger_topic, 10,
+        [&](const std_msgs::msg::Bool::SharedPtr msg) { ros_record_callback(msg, &data); }
+    );
+    std::cout << "Subscribed to trigger topic: " << data.trigger_topic << std::endl;
+    std::cout << "Publishing recording state on: record/recording" << std::endl;
+
     // Spin ROS in a separate thread
-    std::thread ros_thread([&]() {
-        rclcpp::spin(data.node);
+    auto executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    executor->add_node(data.node);
+    std::thread ros_thread([executor]() {
+        executor->spin();
     });
 
-    std::vector<Json::Value> config_roots; // Keeping this for now if needed, but preferably use AppConfig objects
+    // Publish initial recording state (False)
+    {
+        auto msg = std::make_unique<std_msgs::msg::Bool>();
+        msg->data = false;
+        data.pub_recording->publish(std::move(msg));
+    }
+
     std::vector<dc::AppConfig> app_configs;
 
     for (const auto& path : configs) {
-        Json::Value root;
-        if (dc::Config::load_from_file(path, root)) {
-            config_roots.push_back(root);
-            app_configs.push_back(dc::Config::parse_app_config(root));
-        } else {
-             // Error already printed by load_from_file
+        // Determine master directory for relative path fallback
+        std::string master_dir = ".";
+        char resolved[PATH_MAX];
+        const char* abs = realpath(path.c_str(), resolved);
+        if (abs) {
+            master_dir = std::string(abs);
+            auto slash = master_dir.rfind('/');
+            if (slash != std::string::npos) master_dir = master_dir.substr(0, slash);
+        }
+
+        std::set<std::string> visited;
+        if (!dc::Config::load_recursive(path, master_dir, visited, app_configs)) {
             return 1;
         }
     }
 
     for (const auto& cfg : app_configs) {
         if (!cfg.data_directory.empty() && cfg.data_directory != ".") data.data_directory = cfg.data_directory;
-        data.enable_audio = data.enable_audio || cfg.enable_audio;
+        data.record_audio = data.record_audio || cfg.record_audio;
 
         if (!cfg.stages.empty()) {
             data.explicit_stages = true;
@@ -168,12 +194,27 @@ int main(int argc, char *argv[]) {
     // start_ui_update_loop(&data); // Replaced by MainWindow timer
     Gtk::Main::run(window);
 
-    // Shutdown ROS 2 and join thread
-    if (rclcpp::ok()) {
-        rclcpp::shutdown();
-    }
+    // Stop ROS executor first
+    executor->cancel();
     if (ros_thread.joinable()) {
         ros_thread.join();
+    }
+
+    // Explicitly reset ROS objects before shutdown to avoid class_loader warnings
+    data.sub_record.reset();
+    data.pub_recording.reset();
+    for (auto s : data.streams) {
+        s->ros_publisher = image_transport::CameraPublisher();
+    }
+    data.it.reset();
+    data.timers.clear();
+    data.bag_subs.clear();
+    data.bag_writer.reset();
+    data.node.reset();
+
+    // Finally shutdown ROS 2
+    if (rclcpp::ok()) {
+        rclcpp::shutdown();
     }
 
     return 0;

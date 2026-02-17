@@ -12,6 +12,9 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <image_transport/image_transport.hpp>
 
 extern int app_max_threads;
 
@@ -57,11 +60,16 @@ struct VideoStream {
     long long last_fps_ts;
     long long fps_frame_counter;
 
+    // ROS 2 Video Output
+    std::string ros_camera_name;
+    image_transport::CameraPublisher ros_publisher;
+
     VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL),
                     is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0),
                     width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                     total_offset_ns(0), last_raw_pts(-1), last_duration(0),
-                    last_fps_ts(0), fps_frame_counter(0) {}
+                    last_fps_ts(0), fps_frame_counter(0),
+                    ros_camera_name("") {}
 };
 
 struct AppData {
@@ -96,13 +104,15 @@ struct AppData {
     long long recording_start_cpu_ts;
     std::string recording_start_generated_at;
     bool global_recording, blink_state, session_initialized, audio_is_recording, is_quitting;
-    bool enable_audio;
+    bool record_audio;
     int eos_received_count;
 
     // ROS 2 members
     std::string trigger_topic;
     std::shared_ptr<rclcpp::Node> node;
+    std::shared_ptr<image_transport::ImageTransport> it;
     std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Bool>> sub_record;
+    std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> pub_recording;
 
     // ROS Bag members
     std::string session_bag_path;

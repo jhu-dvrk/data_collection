@@ -4,6 +4,78 @@
 #include <algorithm>
 #include <gtk/gtk.h>
 #include <cairo.h>
+#include <gst/app/gstappsink.h>
+#include <gst/video/video.h>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
+#include <image_transport/image_transport.hpp>
+
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/qos.hpp>
+#include <sensor_msgs/image_encodings.hpp>
+
+GstFlowReturn on_new_ros_sample(GstElement *sink, gpointer user_data) {
+    VideoStream *s = (VideoStream *)user_data;
+    GstSample *sample;
+    g_signal_emit_by_name(sink, "pull-sample", &sample);
+    if (sample) {
+        GstBuffer *buf = gst_sample_get_buffer(sample);
+        GstCaps *caps = gst_sample_get_caps(sample);
+        GstVideoInfo info;
+
+        if (gst_video_info_from_caps(&info, caps)) {
+            GstVideoFrame frame;
+            if (gst_video_frame_map(&frame, &info, buf, GST_MAP_READ)) {
+                auto msg = std::make_shared<sensor_msgs::msg::Image>();
+                auto info_msg = std::make_shared<sensor_msgs::msg::CameraInfo>();
+
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                msg->header.stamp.sec = ts.tv_sec;
+                msg->header.stamp.nanosec = ts.tv_nsec;
+                msg->header.frame_id = s->ros_camera_name + "_frame";
+
+                msg->height = GST_VIDEO_INFO_HEIGHT(&info);
+                msg->width = GST_VIDEO_INFO_WIDTH(&info);
+                msg->encoding = sensor_msgs::image_encodings::RGB8;
+                msg->is_bigendian = 0;
+                msg->step = msg->width * 3;
+
+                size_t size = msg->step * msg->height;
+                msg->data.resize(size);
+
+                uint8_t* dst = msg->data.data();
+                uint8_t* src = (uint8_t*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 0);
+                int src_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+
+                if ((int)msg->step == src_stride) {
+                    memcpy(dst, src, size);
+                } else {
+                    for (int h = 0; h < (int)msg->height; ++h) {
+                        memcpy(dst + (h * msg->step), src + (h * src_stride), msg->step);
+                    }
+                }
+
+                info_msg->header = msg->header;
+                info_msg->height = msg->height;
+                info_msg->width = msg->width;
+                info_msg->distortion_model = "plumb_bob";
+                info_msg->d.resize(5, 0.0);
+                info_msg->k[0] = msg->width; // fx
+                info_msg->k[2] = msg->width / 2.0; // cx
+                info_msg->k[4] = msg->width; // fy
+                info_msg->k[5] = msg->height / 2.0; // cy
+                info_msg->k[8] = 1.0;
+
+                s->ros_publisher.publish(msg, info_msg);
+
+                gst_video_frame_unmap(&frame);
+            }
+        }
+        gst_sample_unref(sample);
+    }
+    return GST_FLOW_OK;
+}
 
 void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, guint64 duration, gpointer user_data) {
     (void)overlay; (void)timestamp; (void)duration;
@@ -329,6 +401,17 @@ void create_audio_pipeline(AppData* data) {
 VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
     VideoStream *s = new VideoStream(); s->name = v.name;
     s->record_enabled = v.record;
+    s->ros_camera_name = v.ros_camera_name;
+    if (!s->ros_camera_name.empty()) {
+        std::string base_topic = s->ros_camera_name;
+        // Make sure it's relative (no leading slash)
+        while (!base_topic.empty() && base_topic[0] == '/') base_topic.erase(0, 1);
+
+        // Append /image_raw so image_transport publishes base_topic/image_raw and base_topic/camera_info
+        std::string topic_name = base_topic + "/image_raw";
+        s->ros_publisher = data->it->advertiseCamera(topic_name, 10);
+        std::cout << "Publishing ROS for stream \"" << v.name << "\" to " << topic_name << " and " << (base_topic + "/camera_info") << std::endl;
+    }
 
     std::string caps = "video/x-raw";
     if (v.encoding.width > 0 && v.encoding.height > 0) {
@@ -344,11 +427,24 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
                      " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true shading-value=255 xpad=0 ypad=0 ";
     }
 
-    std::string pstr = v.stream + " ! " + caps + ts_overlay + " ! tee name=__rec_t__ "
+    // Optional GL image sink tee: adds a separate free-aspect-ratio window
+    // right after the source, before timestamp overlays and recording.
+    std::string gl_tee = "";
+    if (v.tee_glimage_sink) {
+        gl_tee = " ! tee name=__gl_t__ "
+                 "__gl_t__. ! queue max-size-buffers=1 leaky=downstream ! glimagesink sync=false force-aspect-ratio=false "
+                 "__gl_t__. ! queue max-size-buffers=1 leaky=downstream ";
+    }
+
+    std::string pstr = v.stream + " ! " + caps + gl_tee + ts_overlay + " ! tee name=__rec_t__ "
         "__rec_t__. ! queue name=__prev_q__ max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=__prev_overlay__ ! gtksink name=__prev_sink__ sync=false async=false ";
 
     if (s->record_enabled) {
         pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! video/x-raw,format=NV12 ! " + get_best_encoder(v.encoding) + " ! queue name=__rec_q_enc__ max-size-buffers=1 leaky=downstream ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
+    }
+
+    if (!s->ros_camera_name.empty()) {
+        pstr += " __rec_t__. ! queue name=__ros_q_ros__ max-size-buffers=2 leaky=downstream ! videoconvert ! video/x-raw,format=RGB ! appsink name=__ros_sink__ emit-signals=true sync=false async=false ";
     }
 
     s->pipeline_desc = pstr;
@@ -372,6 +468,12 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
         gst_object_unref(qrec);
     }
 
+    GstElement *ros_sink = gst_bin_get_by_name(GST_BIN(s->pipeline), "__ros_sink__");
+    if (ros_sink) {
+        g_signal_connect(ros_sink, "new-sample", G_CALLBACK(on_new_ros_sample), s);
+        gst_object_unref(ros_sink);
+    }
+
     std::string sn = s->name; for (char &c : sn) if (c == ' ') c = '_';
     s->output_video = data->session_dir + "/" + sn + "_" + data->start_timestamp + ".mp4";
     s->output_json = data->session_dir + "/" + sn + "_" + data->start_timestamp + ".json";
@@ -383,32 +485,6 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
     if (s->rec_overlay) {
         g_signal_connect(s->rec_overlay, "draw", G_CALLBACK(on_rec_overlay_draw), s);
         gst_object_unref(s->rec_overlay);
-        // Note: we kept the pointer in struct but unref here?
-        // gst_bin_get_by_name returns a NEW ref.
-        // We can keep it if we want, or rely on pipeline ownership.
-        // The struct member is just a pointer, we don't own the ref unless recorded.
-        // Actually, previous code didn't unref rec_text?
-        // Let's check. Yes, it did NOT unref rec_text.
-        // It helps to keep a ref if we access it later. But we don't access rec_overlay later except in callback via user_data?
-        // Wait, on_rec_overlay_draw is called by element.
-        // We don't need to touch s->rec_overlay in UI anymore.
-        // So we can unref it here. But if we want to follow RAII, s->rec_overlay should probably NOT hold a ref if the pipeline holds it,
-        // BUT gst_bin_get_by_name returns a full reference. We MUST unref it eventually or when destroying struct.
-        // For now, let's keep the pattern.
-        // Previous: s->rec_text = ...; NO unref.
-        // This causes a small leak if not cleared in destructor, but pipeline unref cleans children.
-        // However, the extra ref from get_by_name means pipeline won't finalize it fully/double free?
-        // No, if refcount > 1, pipeline simple drops its ref. We assume we hold one.
-        // We should release it in destructor of VideoStream?
-        // VideoStream has no destructor cleaning GST objects currently!
-        // It relies on AppData or main? No.
-        // Minor leak. I'll stick to not unref-ing to match previous style, or better, unref it if not needed.
-        // We don't need s->rec_overlay in UI anymore.
-        // So I will NOT store it in s->rec_overlay if not needed, OR unref it.
-        // I changed struct to have rec_overlay. Let's store it and NOT unref, matching previous leak/style to be safe against double-unref fears if previous code did weird things.
-        // Actually I will unref it immediately because I don't need it outside this function setup since the callback handles it.
-        // I'll keep the struct member and store it but I'll update the replacing code to match previous pattern.
-        // Previous line: s->rec_text = gst_bin_get_by_name(...);
     }
 
     GstElement *sink = gst_bin_get_by_name(GST_BIN(s->pipeline), "__prev_sink__");

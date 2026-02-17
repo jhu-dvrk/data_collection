@@ -14,9 +14,25 @@ AppData::AppData() : audio_pipeline(NULL), audio_sink(NULL), audio_valve(NULL), 
             audio_total_offset_ns(0), audio_last_raw_pts(-1), audio_last_duration(0),
             session_stage_cycle_count(1), current_stage_idx(0), global_recording(false),
             blink_state(false), session_initialized(false), audio_is_recording(false),
-            is_quitting(false), enable_audio(false), eos_received_count(0),
+            is_quitting(false), record_audio(false), eos_received_count(0),
             bag_messages_recorded(0), bag_topics_found(0),
             bag_stats_label(NULL),
             explicit_stages(false) {}
 
-AppData::~AppData() {}
+AppData::~AppData() {
+    for (auto s : streams) {
+        if (s) {
+            if (s->pipeline) {
+                gst_element_set_state(s->pipeline, GST_STATE_NULL);
+                gst_object_unref(s->pipeline);
+            }
+            delete s;
+        }
+    }
+    streams.clear();
+
+    if (audio_pipeline) {
+        gst_element_set_state(audio_pipeline, GST_STATE_NULL);
+        gst_object_unref(audio_pipeline);
+    }
+}
