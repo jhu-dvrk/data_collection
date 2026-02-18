@@ -665,13 +665,6 @@ void TagWindow::save_tags() {
     Json::Value stages_array(Json::arrayValue);
     Json::Value tags_obj(Json::objectValue);
 
-    auto get_ts = [&](long long frame) -> Json::Value {
-        if (!m_data.frame_cpu_timestamps.empty() && frame >= 0 && frame < (long long)m_data.frame_cpu_timestamps.size()) {
-            return (Json::Int64)m_data.frame_cpu_timestamps[frame];
-        }
-        return (Json::Int64)frame;
-    };
-
     struct Stage {
         std::string name;
         long long start = -1;
@@ -690,7 +683,7 @@ void TagWindow::save_tags() {
                 stage_map[name].name = name;
                 stage_map[name].end = frame;
             } else {
-                tags_obj[t].append(get_ts(frame));
+                tags_obj[t].append((Json::Int64)frame);
             }
         }
     }
@@ -714,11 +707,11 @@ void TagWindow::save_tags() {
             }
 
             Json::Value start_obj;
-            start_obj["cpu_ts"] = get_ts(s_frame);
+            start_obj["frame"] = (Json::Int64)s_frame;
             start_obj["generated_at"] = current_time_str;
             
             Json::Value end_obj;
-            end_obj["cpu_ts"] = get_ts(e_frame);
+            end_obj["frame"] = (Json::Int64)e_frame;
             end_obj["generated_at"] = current_time_str;
 
             stage_entry["start"] = start_obj;
@@ -735,6 +728,11 @@ void TagWindow::save_tags() {
     root["stages"] = stages_array;
     root["tags"] = tags_obj;
     root["generated_at"] = current_time_str;
+    
+    std::string vname = m_data.video_path;
+    size_t last_slash = vname.find_last_of("/\\");
+    if (last_slash != std::string::npos) vname = vname.substr(last_slash + 1);
+    root["video_file"] = vname;
 
     std::ofstream ofs(tags_file);
     Json::StreamWriterBuilder builder;

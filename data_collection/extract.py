@@ -153,7 +153,7 @@ def process_video_chunk(args):
     cap.release()
     return saved_count
 
-def extract_video_range(video_path, output_path, start_frame, end_frame, fps):
+def extract_video_range(video_path, output_path, start_frame, end_frame, fps, original_indices=None):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened(): return False
     
@@ -163,17 +163,24 @@ def extract_video_range(video_path, output_path, start_frame, end_frame, fps):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    for i in range(start_frame, end_frame + 1):
-        ret, frame = cap.read()
-        if not ret: break
-        out.write(frame)
+    if original_indices is not None:
+        for idx in original_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if not ret: continue
+            out.write(frame)
+    else:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        for i in range(start_frame, end_frame + 1):
+            ret, frame = cap.read()
+            if not ret: break
+            out.write(frame)
         
     cap.release()
     out.release()
     return True
 
-def extract_session_data(json_path, output_dir, formats, num_jobs, start_ns=None, end_ns=None):
+def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=None, end_acq=None, latency_s=0.0):
     try:
         with open(json_path, 'r') as f: data = json.load(f)
     except Exception as e:
@@ -191,6 +198,10 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_ns=None
 
     if not video_path: return
 
+    # acquisition_time = cpu_ts - latency
+    latency_s = data.get("estimated_latency", latency_s)
+    latency_ns = int(latency_s * 1e9)
+
     timestamps = data.get("timestamps_ns", data.get("timestamps", data.get("timestamps_ms")))
     is_ns = "timestamps_ns" in data
     is_ms = "timestamps_ms" in data and not is_ns
@@ -203,11 +214,11 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_ns=None
 
     if not timestamps: return
 
-    indices = range(len(timestamps))
-    if start_ns is not None or end_ns is not None:
-        indices = [i for i, ts in enumerate(timestamps) if 
-                   (start_ns is None or ts >= start_ns) and 
-                   (end_ns is None or ts <= end_ns)]
+    indices = []
+    for i, ts in enumerate(timestamps):
+        acq_ts = ts - latency_ns
+        if (start_acq is None or acq_ts >= start_acq) and (end_acq is None or acq_ts <= end_acq):
+            indices.append(i)
     
     if not indices: return
     
@@ -221,7 +232,7 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_ns=None
             fps = data.get("fps", 30.0)
             out_name = f"{video_basename}.mp4"
             print(f"Extracting video segment: {out_name}")
-            extract_video_range(video_path, os.path.join(output_dir, out_name), start_idx, end_idx, fps)
+            extract_video_range(video_path, os.path.join(output_dir, out_name), start_idx, end_idx, fps, indices)
         else:
             tasks = []
             chunk_size = math.ceil(len(indices) / num_jobs)
@@ -229,7 +240,7 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_ns=None
                 s = i * chunk_size
                 e = min((i + 1) * chunk_size, len(indices))
                 if s >= len(indices): break
-                tasks.append((video_path, output_dir, filtered_timestamps[s:e], start_idx + s, fmt, video_basename, is_ns, is_ms))
+                tasks.append((video_path, output_dir, [filtered_timestamps[k] for k in range(s, e)], indices[s], fmt, video_basename, is_ns, is_ms))
             
             if num_jobs > 1:
                 with multiprocessing.Pool(processes=num_jobs) as pool: pool.map(process_video_chunk, tasks)
@@ -267,13 +278,39 @@ def main():
     if args.tags:
         tags_path = args.tags if os.path.isabs(args.tags) else os.path.join(args.directory, args.tags)
         with open(tags_path, 'r') as f: tags_data = json.load(f)
+        
+        source_v_name = tags_data.get("video_file")
+        source_v_latency = 0.0
+        source_v_ts = []
+        if source_v_name:
+            for v in videos:
+                if v["file"] == source_v_name:
+                    v_base = os.path.splitext(v["file"])[0]
+                    v_json = os.path.join(args.directory, f"{v_base}.json")
+                    if os.path.exists(v_json):
+                        with open(v_json, 'r') as vf:
+                            v_data = json.load(vf)
+                            source_v_latency = v_data.get("estimated_latency", 0.0)
+                            source_v_ts = v_data.get("timestamps_ns", v_data.get("timestamps", []))
+                    break
+
         stage_counts = {}
         for stage in tags_data.get("stages", []):
             name = stage["name"]
             
-            # Support both flat and nested objects
-            start_val = parse_stage_timestamp(stage.get("start"))
-            end_val = parse_stage_timestamp(stage.get("end"))
+            ts_s, f_s = parse_stage_timestamp(stage.get("start"))
+            ts_e, f_e = parse_stage_timestamp(stage.get("end"))
+            
+            def resolve_acq(ts, f):
+                if f is not None and source_v_ts:
+                    if 0 <= f < len(source_v_ts):
+                        return source_v_ts[f] - int(source_v_latency * 1e9)
+                if ts:
+                    return ts - int(source_v_latency * 1e9)
+                return None
+
+            start_val = resolve_acq(ts_s, f_s)
+            end_val = resolve_acq(ts_e, f_e)
                 
             stage_counts[name] = stage_counts.get(name, 0) + 1
             dir_name = f"{name}_{stage_counts[name]:03d}"

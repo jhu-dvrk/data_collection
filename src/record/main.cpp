@@ -194,6 +194,10 @@ int main(int argc, char *argv[]) {
     // start_ui_update_loop(&data); // Replaced by MainWindow timer
     Gtk::Main::run(window);
 
+    // Stop GStreamer pipelines first
+    for (auto s : data.streams) if (s->pipeline) gst_element_set_state(s->pipeline, GST_STATE_NULL);
+    if (data.audio_pipeline) gst_element_set_state(data.audio_pipeline, GST_STATE_NULL);
+
     // Stop ROS executor first
     executor->cancel();
     if (ros_thread.joinable()) {

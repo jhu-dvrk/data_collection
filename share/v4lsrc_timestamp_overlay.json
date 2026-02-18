@@ -1,16 +1,19 @@
 {
-    "data_directory": "data",
-    "videos": [
-        {
-            "name": "main_camera",
-            "stream": "v4l2src device=/dev/video0",
-            "ros_camera_name": "main",
-            "timestamp_overlay": true,
-            "encoding": {
-                "frame_rate": 30,
-                "width": 640,
-                "height": 480
-            }
-        }
-    ]
+	"data_directory" : "data",
+	"videos" : 
+	[
+		{
+			"encoding" : 
+			{
+				"frame_rate" : 30,
+				"height" : 480,
+				"width" : 640
+			},
+			"estimated_latency" : 0.1484626329,
+			"name" : "main_camera",
+			"ros_camera_name" : "main",
+			"stream" : "v4l2src device=/dev/video0",
+			"timestamp_overlay" : true
+		}
+	]
 }

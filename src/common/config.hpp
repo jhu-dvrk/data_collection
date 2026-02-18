@@ -25,6 +25,7 @@ struct VideoConfig {
     bool timestamp_overlay = false;
     bool tee_glimage_sink = false;
     std::string ros_camera_name = "";
+    double estimated_latency = 0.0;
 };
 
 struct AppConfig {

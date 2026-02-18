@@ -20,11 +20,11 @@ def parse_stage_timestamp(value):
                Can be an integer (legacy) or a dict {"cpu_ts": ..., "generated_at": ...}
     
     Returns:
-        int: The cpu timestamp. Returns 0 if invalid.
+        tuple: (cpu_ts, frame). Either or both can be None. Returns (0, None) if invalid.
     """
     if isinstance(value, dict):
-        return int(value.get("cpu_ts", 0))
+        return value.get("cpu_ts"), value.get("frame")
     try:
-        return int(value)
+        return int(value), None
     except (ValueError, TypeError):
-        return 0
+        return 0, None

@@ -44,6 +44,7 @@ struct VideoStream {
     long long last_run_frames_recorded;
     std::string last_run_stage_name;
     double current_fps;
+    double estimated_latency;
 
     // Source Stats
     int width, height;
@@ -65,7 +66,7 @@ struct VideoStream {
     image_transport::CameraPublisher ros_publisher;
 
     VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL),
-                    is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0),
+                    is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0), estimated_latency(0.0),
                     width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                     total_offset_ns(0), last_raw_pts(-1), last_duration(0),
                     last_fps_ts(0), fps_frame_counter(0),

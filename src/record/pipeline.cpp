@@ -412,6 +412,7 @@ void create_audio_pipeline(AppData* data) {
 VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
     VideoStream *s = new VideoStream(); s->name = v.name;
     s->record_enabled = v.record;
+    s->estimated_latency = v.estimated_latency;
     s->ros_camera_name = v.ros_camera_name;
     if (!s->ros_camera_name.empty()) {
         std::string base_topic = s->ros_camera_name;

@@ -322,6 +322,7 @@ MainWindow::~MainWindow() {
                 framesArr.append(frameNode);
             }
             root["frames"] = framesArr;
+            root["estimated_latency"] = s->estimated_latency;
 
             std::ofstream os(s->output_json); Json::StreamWriterBuilder b;
             std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
