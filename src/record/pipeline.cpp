@@ -162,6 +162,15 @@ double get_audio_level_max(const GValue* gv) {
     return m;
 }
 
+static void dump_dot(GstElement* pipeline, const std::string& session_dir, const std::string& name) {
+    gchar* dot_data = gst_debug_bin_to_dot_data(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL);
+    if (dot_data) {
+        std::string dot_path = session_dir + "/" + name + ".dot";
+        g_file_set_contents(dot_path.c_str(), dot_data, -1, NULL);
+        g_free(dot_data);
+    }
+}
+
 GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
     VideoStream *s = (VideoStream *)user_data;
     if (info->type & GST_PAD_PROBE_TYPE_BUFFER) {
@@ -394,6 +403,8 @@ void create_audio_pipeline(AppData* data) {
         gst_bus_add_watch(bus, bus_call, data);
         gst_object_unref(bus);
 
+        dump_dot(data->audio_pipeline, data->session_dir, "audio_pipeline");
+
         gst_element_set_state(data->audio_pipeline, GST_STATE_PLAYING);
     }
 }
@@ -451,6 +462,9 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
     s->pipeline = gst_parse_launch(pstr.c_str(), NULL);
     if (!s->pipeline) { delete s; return NULL; }
 
+    std::string sn = v.name; for (char &c : sn) if (c == ' ') c = '_';
+    dump_dot(s->pipeline, data->session_dir, sn + "_pipeline");
+
     GstElement *tee = gst_bin_get_by_name(GST_BIN(s->pipeline), "__rec_t__");
     if (tee) {
         GstPad *tpad = gst_element_get_static_pad(tee, "sink");
@@ -474,7 +488,6 @@ VideoStream* create_video_stream(AppData* data, const dc::VideoConfig& v) {
         gst_object_unref(ros_sink);
     }
 
-    std::string sn = s->name; for (char &c : sn) if (c == ' ') c = '_';
     s->output_video = data->session_dir + "/" + sn + "_" + data->start_timestamp + ".mp4";
     s->output_json = data->session_dir + "/" + sn + "_" + data->start_timestamp + ".json";
     GstElement *fsink = gst_bin_get_by_name(GST_BIN(s->pipeline), "__rec_filesink__");

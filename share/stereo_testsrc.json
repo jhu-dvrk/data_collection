@@ -7,6 +7,7 @@
       "record": true,
       "tee_glimage_sink": true,
       "timestamp_overlay": true,
+      "ros_camera_name": "stereo1",
       "recording_options": {
         "encoding": {
           "bitrate": 500000,
