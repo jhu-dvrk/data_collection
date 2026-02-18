@@ -19,7 +19,7 @@ struct VideoEncoding {
 
 struct VideoConfig {
     std::string name;
-    std::string stream;record
+    std::string stream;
     VideoEncoding encoding;
     bool record = true;
     bool timestamp_overlay = false;
