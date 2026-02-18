@@ -1,5 +1,11 @@
 # Video Data Record
 
+[![Documentation Status](https://readthedocs.org/projects/dvrk_data_collection/badge/?version=latest)](https://dvrk_data_collection.readthedocs.io/en/latest/?badge=latest)
+
+The latest documentation is available at [readthedocs.io/dvrk_data_collection](https://dvrk_data_collection.readthedocs.io).
+
+![Live Preview](docs/_static/live_preview.png)
+
 A multi-stream video record application using C++, GStreamer, and GTKmm. It allows creating flexible video streams via JSON configuration, provides live previews, and supports synchronized recording with timestamps. ROS topics can also be recorded along the videos. Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
 
 The application also integrates with ROS2 for remote control and status monitoring.
