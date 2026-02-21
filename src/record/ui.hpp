@@ -17,6 +17,11 @@ public:
     MainWindow(AppData* data);
     virtual ~MainWindow();
 
+    // Call this once from main() right after Gtk::Main::run() returns to
+    // properly finalize GStreamer pipelines and write all session metadata.
+    // Safe to call multiple times (idempotent).
+    void finalize_session();
+
 protected:
     // Signal handlers
     void on_record_toggle();
@@ -89,6 +94,7 @@ protected:
 
     // Update Timer
     sigc::connection m_update_conn;
+    bool m_session_finalized = false;
 
 public:
     void trigger_record_toggle();

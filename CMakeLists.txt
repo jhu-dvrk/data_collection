@@ -45,8 +45,10 @@ set_target_properties(data_collection_lib PROPERTIES OUTPUT_NAME "data_collectio
 # C++ Executable: record
 add_executable(record
   src/record/main.cpp
-  src/record/context.cpp
-  src/record/pipeline.cpp
+  src/record/app_data.cpp
+  src/record/gst_helpers.cpp
+  src/record/video_stream.cpp
+  src/record/audio_stream.cpp
   src/record/ui.cpp
   src/record/ros_node.cpp
 )

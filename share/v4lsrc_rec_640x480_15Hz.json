@@ -3,14 +3,9 @@
     "videos": [
         {
             "name": "v4l_camera",
-            "stream": "v4l2src device=/dev/video0",
+            "stream": "v4l2src device=/dev/video4",
             "record": true,
-            "tee_gl_view": false,
-            "encoding": {
-                "frame_rate": 15,
-                "width": 640,
-                "height": 480
-            }
+            "tee_gl_view": false
         }
     ]
 }

@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <climits>
 #include <set>
+#include <filesystem>
 
 #include <gtkmm.h>
 #include <gst/gst.h>
@@ -17,7 +18,8 @@
 #include <glib-unix.h>
 
 #include "context.hpp"
-#include "pipeline.hpp"
+#include "video_stream.hpp"
+#include "audio_stream.hpp"
 #include "ui.hpp"
 #include "ros_node.hpp"
 #include "config.hpp"
@@ -176,15 +178,30 @@ int main(int argc, char *argv[]) {
 
     for (const auto& cfg : app_configs) {
         for (const auto& v : cfg.videos) {
-            VideoStream* s = create_video_stream(&data, v);
-            if (s) data.streams.push_back(s);
+            VideoStream* s = new VideoStream();
+            if (s->create(&data, &v)) {
+                data.streams.push_back(s);
+            } else {
+                delete s;
+            }
         }
     }
 
     // Initialize UI Window
     MainWindow window(&data);
 
-    create_audio_pipeline(&data);
+    if (data.record_audio) {
+        AudioStream* a = new AudioStream();
+        if (a->create(&data)) {
+            data.audio_stream = a;
+        } else {
+            delete a;
+        }
+    }
+
+    // Start video pipelines AFTER the MainWindow has been constructed and all
+    // gtksink widgets are embedded in the layout, preventing the GTK reparent
+    // warning ("widget already inside a container of type GtkWindow").
     for (auto s : data.streams) gst_element_set_state(s->pipeline, GST_STATE_PLAYING);
 
     // Handle Ctrl+C
@@ -194,9 +211,10 @@ int main(int argc, char *argv[]) {
     // start_ui_update_loop(&data); // Replaced by MainWindow timer
     Gtk::Main::run(window);
 
-    // Stop GStreamer pipelines first
-    for (auto s : data.streams) if (s->pipeline) gst_element_set_state(s->pipeline, GST_STATE_NULL);
-    if (data.audio_pipeline) gst_element_set_state(data.audio_pipeline, GST_STATE_NULL);
+    // Finalize GStreamer pipelines and write session metadata FIRST, while
+    // the pipelines are still alive.  This must happen before any ROS teardown
+    // because the bag writer is closed here.
+    window.finalize_session();
 
     // Stop ROS executor first
     executor->cancel();
@@ -219,6 +237,17 @@ int main(int argc, char *argv[]) {
     // Finally shutdown ROS 2
     if (rclcpp::ok()) {
         rclcpp::shutdown();
+    }
+
+    // Clean up session directory if no recording was ever triggered
+    if (!data.any_recording_started && !data.session_dir.empty()) {
+        std::error_code ec;
+        std::filesystem::remove_all(data.session_dir, ec);
+        if (!ec) {
+            std::cout << "No recording made - removed empty session directory: " << data.session_dir << std::endl;
+        } else {
+            std::cerr << "Warning: could not remove session directory: " << ec.message() << std::endl;
+        }
     }
 
     return 0;

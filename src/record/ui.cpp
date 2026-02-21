@@ -1,5 +1,6 @@
 #include "ui.hpp"
-#include "pipeline.hpp"
+#include "video_stream.hpp"
+#include "audio_stream.hpp"
 #include "ros_node.hpp"
 #include "tags.hpp"
 
@@ -245,47 +246,38 @@ MainWindow::MainWindow(AppData* data)
 MainWindow::~MainWindow() {
     g_main_window_instance = nullptr;
     m_update_conn.disconnect();
+    // All session data/pipeline finalization is handled by finalize_session(),
+    // which main() calls explicitly right after Gtk::Main::run() returns.
+    // Call it here only as a safety net (e.g. if someone destroys the window
+    // object without calling finalize_session() first).
+    finalize_session();
+}
 
-    // Shutdown logic (moved from on_window_destroy_cb)
+void MainWindow::finalize_session() {
+    if (m_session_finalized) return;
+    m_session_finalized = true;
+
     m_data->is_quitting = true;
 
-    auto send_eos_and_wait = [](GstElement* pipeline) {
-        if (!pipeline) return;
-        gst_element_send_event(pipeline, gst_event_new_eos());
-        GstBus* bus = gst_element_get_bus(pipeline);
-        if (bus) {
-            gst_bus_timed_pop_filtered(bus, 2 * GST_SECOND, (GstMessageType)(GST_MESSAGE_EOS | GST_MESSAGE_ERROR));
-            gst_object_unref(bus);
-        }
-        gst_element_set_state(pipeline, GST_STATE_NULL);
-    };
-
-    // Force stop recording logic manual override (since toggle checks is_quitting)
-    // Actually, we just need to ensure valves are open and files are written.
     if (m_data->global_recording) {
-        // Stop ROS Bag
         close_bag_writer(m_data);
     }
 
-    // Unblock valves to let EOS pass through
-    if (m_data->audio_valve) g_object_set(m_data->audio_valve, "drop", FALSE, NULL);
-    for (auto s : m_data->streams) if (s->valve) g_object_set(s->valve, "drop", FALSE, NULL);
+    // Shut down all pipelines properly
+    if (m_data->audio_stream) m_data->audio_stream->shutdown();
+    for (auto s : m_data->streams) s->shutdown();
 
-    // Flush pipelines so container writers finalize cleanly
-    send_eos_and_wait(m_data->audio_pipeline);
-    for (auto s : m_data->streams) send_eos_and_wait(s->pipeline);
-
-    if (!m_data->audio_frames.empty()) {
+    if (m_data->audio_stream && !m_data->audio_stream->frames.empty()) {
         Json::Value root; root["name"] = "audio";
         root["audio_file"] = "audio_" + m_data->start_timestamp + ".wav";
-        root["gstreamer_pipeline"] = m_data->audio_pipeline_desc;
+        root["gstreamer_pipeline"] = m_data->audio_stream->pipeline_desc;
 
         Json::Value configFiles(Json::arrayValue);
         for (const auto& f : m_data->config_files) configFiles.append(f);
         root["config_files"] = configFiles;
 
         Json::Value framesArr(Json::arrayValue);
-        for (const auto& f : m_data->audio_frames) {
+        for (const auto& f : m_data->audio_stream->frames) {
             Json::Value frameNode;
             frameNode["cpu_ts"] = (Json::Value::Int64)f.cpu_ts;
             frameNode["gst_ts"] = (Json::Value::Int64)f.gst_ts;
@@ -293,7 +285,7 @@ MainWindow::~MainWindow() {
         }
         root["frames"] = framesArr;
 
-        std::ofstream os(m_data->audio_output_json); Json::StreamWriterBuilder b;
+        std::ofstream os(m_data->audio_stream->output_json); Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
     }
 
@@ -327,11 +319,10 @@ MainWindow::~MainWindow() {
             std::ofstream os(s->output_json); Json::StreamWriterBuilder b;
             std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
         }
-        gst_element_send_event(s->pipeline, gst_event_new_eos());
     }
 
     // Write index.json
-    if (!m_data->streams.empty() || !m_data->audio_frames.empty()) {
+    if (!m_data->streams.empty() || (m_data->audio_stream && !m_data->audio_stream->frames.empty())) {
         Json::Value indexRoot;
         Json::Value videosArr(Json::arrayValue);
 
@@ -347,20 +338,21 @@ MainWindow::~MainWindow() {
             videosArr.append(vid);
         }
 
-        if (!m_data->audio_frames.empty()) {
+        if (m_data->audio_stream && !m_data->audio_stream->frames.empty()) {
              Json::Value aud;
              std::string fname = "audio_" + m_data->start_timestamp + ".wav";
              aud["file"] = fname;
              double duration = 0.0;
-             if (m_data->audio_frames.size() > 1) {
-                  for (size_t i = 0; i < m_data->audio_frames.size() - 1; ++i) {
-                      long long diff = m_data->audio_frames[i+1].cpu_ts - m_data->audio_frames[i].cpu_ts;
+             const auto& af = m_data->audio_stream->frames;
+             if (af.size() > 1) {
+                  for (size_t i = 0; i < af.size() - 1; ++i) {
+                      long long diff = af[i+1].cpu_ts - af[i].cpu_ts;
                       if (diff < 500 * 1000000) { // 500ms threshold for gaps
                           duration += (double)diff / 1e9;
                       }
                   }
                   // Adjust for last frame
-                  if (duration > 0) duration += (duration / (m_data->audio_frames.size() - 1));
+                  if (duration > 0) duration += (duration / (af.size() - 1));
              }
              aud["duration"] = duration;
              videosArr.append(aud);
@@ -443,21 +435,7 @@ MainWindow::~MainWindow() {
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsRoot, &os);
     }
 
-    if (m_data->audio_pipeline) {
-        gst_element_send_event(m_data->audio_pipeline, gst_event_new_eos());
-        gst_element_set_state(m_data->audio_pipeline, GST_STATE_NULL);
-    }
-
-    for (auto s : m_data->streams) {
-        if (s->pipeline) {
-            gst_element_set_state(s->pipeline, GST_STATE_NULL);
-        }
-    }
-
-    // Shutdown ROS 2
-    if (rclcpp::ok()) rclcpp::shutdown();
-
-    std::cout << "Cleanup finished in MainWindow destructor." << std::endl;
+    std::cout << "Session finalized." << std::endl;
 }
 
 MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream* s) {
@@ -606,6 +584,7 @@ void MainWindow::on_record_toggle() {
     std::string base_stage = m_data->config_stages.empty() ? "stage" : m_data->config_stages[active_idx];
 
     if (m_data->global_recording) {
+        m_data->any_recording_started = true;
         char stage_buf[128];
         snprintf(stage_buf, sizeof(stage_buf), "%s_%03d", base_stage.c_str(), m_data->session_stage_cycle_count);
         std::string final_stage_name = stage_buf;
@@ -619,10 +598,9 @@ void MainWindow::on_record_toggle() {
              m_data->recording_start_generated_at = dc::get_current_timestamp_iso8601();
         }
 
-        if (m_data->audio_valve) {
+        if (m_data->audio_stream) {
             bool audio_rec = m_audio_enable_check.get_active();
-            m_data->audio_is_recording = audio_rec;
-            g_object_set(m_data->audio_valve, "drop", !audio_rec, NULL);
+            m_data->audio_stream->set_recording(audio_rec);
         }
 
         // ROS Bag is now continuous for the session, no open/close here.
@@ -633,9 +611,8 @@ void MainWindow::on_record_toggle() {
             if (s->valve) g_object_set(s->valve, "drop", !stream_rec, NULL);
         }
     } else {
-         if (m_data->audio_valve) {
-            m_data->audio_is_recording = false;
-            g_object_set(m_data->audio_valve, "drop", TRUE, NULL);
+         if (m_data->audio_stream) {
+            m_data->audio_stream->set_recording(false);
         }
 
         // Do not close ROS bag here.
