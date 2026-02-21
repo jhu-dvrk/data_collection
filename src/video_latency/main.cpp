@@ -285,9 +285,10 @@ protected:
 
     void load_pipeline() {
         std::string stream = m_video_config.stream;
-        std::string caps = dc::Config::make_caps_string(m_video_config.encoding);
 
-        std::string pstr = stream + " ! " + caps + " ! identity name=probe_identity ! videoconvert ! gtksink name=sink";
+        // Note: No caps filter based on encoding settings here because source settings are now in the stream field.
+        // We ensure raw format for our probe using videoconvert.
+        std::string pstr = stream + " ! videoconvert ! video/x-raw ! identity name=probe_identity ! videoconvert ! gtksink name=sink";
         std::cout << "Launching: " << pstr << std::endl;
 
         GError* err = nullptr;

@@ -127,6 +127,22 @@ install(TARGETS video_latency
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# C++ Executable: video_configurator
+add_executable(video_configurator
+  src/video_configurator/video_configurator.cpp
+)
+target_include_directories(video_configurator PRIVATE
+  ${GST_INCLUDE_DIRS}
+  ${JSONCPP_INCLUDE_DIRS}
+)
+target_link_libraries(video_configurator
+  ${GST_LIBRARIES}
+  ${JSONCPP_LIBRARIES}
+)
+install(TARGETS video_configurator
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Python Package
 ament_python_install_package(${PROJECT_NAME})
 

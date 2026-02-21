@@ -52,12 +52,19 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
         std::cout << "Publishing ROS for stream \"" << v->name << "\" to " << topic_name << std::endl;
     }
 
-    std::string caps = "video/x-raw";
-    if (v->encoding.width > 0 && v->encoding.height > 0) {
-        caps += ",width=" + std::to_string(v->encoding.width) + ",height=" + std::to_string(v->encoding.height);
-    }
-    if (v->encoding.frame_rate > 0) {
-        caps += ",framerate=" + std::to_string(v->encoding.frame_rate) + "/1";
+    // Recording and encoding caps
+    // Use an extra videoconvert to ensure we can reach the desired format/size
+    std::string rec_pipeline_segment = "";
+    std::string rec_caps = "video/x-raw,format=NV12";
+    
+    if ((v->encoding.width > 0 && v->encoding.height > 0) || v->encoding.frame_rate > 0) {
+        rec_pipeline_segment = " ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! videoscale ! videorate";
+        if (v->encoding.width > 0 && v->encoding.height > 0) {
+            rec_caps += ",width=" + std::to_string(v->encoding.width) + ",height=" + std::to_string(v->encoding.height);
+        }
+        if (v->encoding.frame_rate > 0) {
+            rec_caps += ",framerate=" + std::to_string(v->encoding.frame_rate) + "/1";
+        }
     }
 
     std::string ts_overlay = "";
@@ -76,11 +83,11 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     std::string enc = get_best_encoder(v->encoding);
     std::cout << "Using encoder for stream \"" << v->name << "\": " << enc << std::endl;
 
-    std::string pstr = v->stream + " ! " + caps + gl_tee + ts_overlay + " ! tee name=__rec_t__ "
+    std::string pstr = v->stream + gl_tee + ts_overlay + " ! tee name=__rec_t__ "
         "__rec_t__. ! queue name=__prev_q__ max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=__prev_overlay__ ! gtksink name=__prev_sink__ sync=false async=false ";
 
     if (this->record_enabled) {
-        pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! video/x-raw,format=NV12 ! " + enc + " ! queue name=__rec_q_enc__ max-size-buffers=30 max-size-time=0 max-size-bytes=0 ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
+        pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true" + rec_pipeline_segment + " ! " + rec_caps + " ! " + enc + " ! queue name=__rec_q_enc__ max-size-buffers=30 max-size-time=0 max-size-bytes=0 ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
     }
 
     if (!v->ros_camera_name.empty()) {
