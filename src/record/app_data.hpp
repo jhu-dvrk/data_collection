@@ -30,7 +30,12 @@ struct AppData {
     GtkWidget *audio_src_combo, *stages_combo, *session_entry, *grid;
     std::string data_directory, session_dir, start_timestamp;
 
-    std::vector<std::pair<std::string, long long>> session_event_tags;
+    struct TagEvent {
+        std::string name;
+        long long cpu_ts;
+        std::string generated_at;
+    };
+    std::vector<TagEvent> session_event_tags;
     struct StageEvent {
         std::string name;
         long long start_ts;

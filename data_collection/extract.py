@@ -133,9 +133,13 @@ def rosbag_to_csv(bag_path, output_dir, start_ns=None, end_ns=None):
     print("Finished CSV conversion.")
 
 def process_video_chunk(args):
-    video_path, output_dir, timestamps, start_frame_idx, output_format, video_basename, is_ns, is_ms = args
+    video_path, output_dir, timestamps, start_frame_idx, output_format, video_basename, is_ns, is_ms, side_by_side = args
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened(): return 0
+
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    half_width = width // 2
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_idx)
     saved_count = 0
@@ -147,13 +151,23 @@ def process_video_chunk(args):
         elif is_ms: ts_str = f"{float(ts) / 1000.0:.6f}"
         else: ts_str = f"{float(ts):.6f}"
         
-        image_name = f"{video_basename}_{ts_str}.{output_format}"
-        cv2.imwrite(os.path.join(output_dir, image_name), frame)
+        if side_by_side in ["", "LR", "RL"]:
+            left = frame[:, :half_width]
+            right = frame[:, half_width:]
+            
+            if side_by_side == "RL":
+                left, right = right, left
+                
+            cv2.imwrite(os.path.join(output_dir, f"{video_basename}L_{ts_str}.{output_format}"), left)
+            cv2.imwrite(os.path.join(output_dir, f"{video_basename}R_{ts_str}.{output_format}"), right)
+        else:
+            image_name = f"{video_basename}_{ts_str}.{output_format}"
+            cv2.imwrite(os.path.join(output_dir, image_name), frame)
         saved_count += 1
     cap.release()
     return saved_count
 
-def extract_video_range(video_path, output_path, start_frame, end_frame, fps, original_indices=None):
+def extract_video_range(video_path, output_path, start_frame, end_frame, fps, original_indices=None, side_by_side="undefined"):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened(): return False
     
@@ -161,23 +175,46 @@ def extract_video_range(video_path, output_path, start_frame, end_frame, fps, or
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
+    out_l, out_r = None, None
+    out = None
+    
+    if side_by_side in ["", "LR", "RL"]:
+        half_width = width // 2
+        base_path = os.path.splitext(output_path)[0]
+        out_l = cv2.VideoWriter(f"{base_path}L.mp4", fourcc, fps, (half_width, height))
+        out_r = cv2.VideoWriter(f"{base_path}R.mp4", fourcc, fps, (half_width, height))
+    else:
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    def process_frame(f):
+        if side_by_side in ["", "LR", "RL"]:
+            left = f[:, :half_width]
+            right = f[:, half_width:]
+            if side_by_side == "RL":
+                left, right = right, left
+            out_l.write(left)
+            out_r.write(right)
+        else:
+            out.write(f)
+
     if original_indices is not None:
         for idx in original_indices:
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
             if not ret: continue
-            out.write(frame)
+            process_frame(frame)
     else:
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         for i in range(start_frame, end_frame + 1):
             ret, frame = cap.read()
             if not ret: break
-            out.write(frame)
+            process_frame(frame)
         
     cap.release()
-    out.release()
+    if out: out.release()
+    if out_l: out_l.release()
+    if out_r: out_r.release()
     return True
 
 def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=None, end_acq=None, latency_s=0.0):
@@ -226,13 +263,14 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=Non
     end_idx = indices[-1]
     filtered_timestamps = [timestamps[i] for i in indices]
     video_basename = os.path.splitext(os.path.basename(video_path))[0]
+    side_by_side = data.get("side_by_side", "undefined")
     
     for fmt in formats:
         if fmt == 'mp4':
             fps = data.get("fps", 30.0)
-            out_name = f"{video_basename}.mp4"
-            print(f"Extracting video segment: {out_name}")
-            extract_video_range(video_path, os.path.join(output_dir, out_name), start_idx, end_idx, fps, indices)
+            out_all_name = f"{video_basename}.mp4"
+            print(f"Extracting video segment: {out_all_name}")
+            extract_video_range(video_path, os.path.join(output_dir, out_all_name), start_idx, end_idx, fps, indices, side_by_side)
         else:
             tasks = []
             chunk_size = math.ceil(len(indices) / num_jobs)
@@ -240,7 +278,7 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=Non
                 s = i * chunk_size
                 e = min((i + 1) * chunk_size, len(indices))
                 if s >= len(indices): break
-                tasks.append((video_path, output_dir, [filtered_timestamps[k] for k in range(s, e)], indices[s], fmt, video_basename, is_ns, is_ms))
+                tasks.append((video_path, output_dir, [filtered_timestamps[k] for k in range(s, e)], indices[s], fmt, video_basename, is_ns, is_ms, side_by_side))
             
             if num_jobs > 1:
                 with multiprocessing.Pool(processes=num_jobs) as pool: pool.map(process_video_chunk, tasks)

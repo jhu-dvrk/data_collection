@@ -728,6 +728,7 @@ void TagWindow::save_tags() {
     root["stages"] = stages_array;
     root["tags"] = tags_obj;
     root["generated_at"] = current_time_str;
+    root["session_tags_loaded"] = m_data.session_tags_loaded;
     
     std::string vname = m_data.video_path;
     size_t last_slash = vname.find_last_of("/\\");
@@ -760,6 +761,10 @@ void TagWindow::load_tags(const std::string& explicit_path) {
 
     Json::Value root;
     ifs >> root;
+
+    if (root.isMember("session_tags_loaded") && root["session_tags_loaded"].asBool()) {
+        m_data.session_tags_loaded = true;
+    }
 
     auto find_frame = [&](long long ts) -> long long {
         if (m_data.frame_cpu_timestamps.empty()) return ts;
@@ -865,15 +870,40 @@ TagWindow::MissingTagsResult TagWindow::show_missing_tags_dialog(const std::vect
     if (result == (int)MissingTagsResult::QUIT) {
         std::exit(0);
     }
+    if (m_data.session_tags_loaded) {
+        Gtk::MessageDialog dialog(*this, "Session Tags Already Loaded", false, Gtk::MESSAGE_ERROR, Gtk::BUTTONS_OK, true);
+        dialog.set_secondary_text("Session tags have already been imported into this video's tag file. Using -T again is not allowed to prevent duplicates.");
+        dialog.run();
+        std::exit(1);
+    }
+
     return (MissingTagsResult)result;
 }
 
 void TagWindow::load_session_tags() {
+    if (m_data.session_tags_loaded) {
+        Gtk::MessageDialog dialog(*this, "Session Tags Already Loaded", false, Gtk::MESSAGE_ERROR, Gtk::BUTTONS_OK, true);
+        dialog.set_secondary_text("Session tags have already been imported into this video's tag file. Using -T again is not allowed to prevent duplicates.");
+        dialog.run();
+        std::exit(1);
+    }
+
     std::string base = m_data.video_path;
     size_t last_slash = base.find_last_of("/\\");
     if (last_slash == std::string::npos) return;
     std::string session_dir = base.substr(0, last_slash);
+
+    // Look for timestamped session tags first
     std::string tags_json = session_dir + "/tags.json";
+    
+    // Find any file matching *_tags.json in the session directory
+    Glib::Dir dir(session_dir);
+    for (const auto& entry : dir) {
+        if (entry.size() > 10 && entry.compare(entry.size() - 10, 10, "_tags.json") == 0) {
+            tags_json = session_dir + "/" + entry;
+            break;
+        }
+    }
 
     std::cout << "Attempting to load session tags from: " << tags_json << std::endl;
 
@@ -975,7 +1005,8 @@ void TagWindow::load_session_tags() {
         for (auto const& name : root["tags"].getMemberNames()) {
             if (m_tag_buttons.count(name) == 0) continue;
             for (auto& t : root["tags"][name]) {
-                long long frame = find_frame(t.asInt64());
+                long long tag_ts = dc::parse_stage_timestamp(t);
+                long long frame = find_frame(tag_ts);
                 if (frame != -1) {
                     m_data.frame_tags[frame].push_back(name);
                     count++;
@@ -984,6 +1015,7 @@ void TagWindow::load_session_tags() {
         }
     }
 
+    m_data.session_tags_loaded = (count > 0);
     std::cout << "Successfully loaded " << count << " entries from session tags." << std::endl;
     std::string current_info = m_info_label.get_text();
     m_info_label.set_text(current_info + " | Session tags: " + std::to_string(count));

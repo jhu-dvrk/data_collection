@@ -29,6 +29,7 @@ struct TagData {
     long long session_start_cpu_ns = 0;
     long long session_duration_ns = 0;
     double fps = 30.0;
+    bool session_tags_loaded = false;
 
     GstElement *pipeline = nullptr;
     GstElement *video_sink = nullptr;

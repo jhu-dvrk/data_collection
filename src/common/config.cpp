@@ -36,6 +36,7 @@ std::vector<VideoConfig> Config::parse_videos(const Json::Value& root) {
         if (v.isMember("timestamp_overlay")) cfg.timestamp_overlay = v["timestamp_overlay"].asBool();
         if (v.isMember("tee_glimage_sink")) cfg.tee_glimage_sink = v["tee_glimage_sink"].asBool();
         if (v.isMember("ros_camera_name")) cfg.ros_camera_name = v["ros_camera_name"].asString();
+        if (v.isMember("side_by_side")) cfg.side_by_side = v["side_by_side"].asString();
         if (v.isMember("estimated_latency")) cfg.estimated_latency = v["estimated_latency"].asDouble();
 
         if (v.isMember("encoding")) {

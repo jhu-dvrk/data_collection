@@ -48,6 +48,7 @@ public:
 
     // ROS 2 Video
     std::string ros_camera_name;
+    std::string side_by_side;
     image_transport::CameraPublisher ros_publisher;
 
 private:

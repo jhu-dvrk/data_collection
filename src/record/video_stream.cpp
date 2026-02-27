@@ -41,6 +41,7 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     this->m_ad = ad;
     this->name = v->name;
     this->record_enabled = v->record;
+    this->side_by_side = v->side_by_side;
     this->estimated_latency = v->estimated_latency;
     this->ros_camera_name = v->ros_camera_name;
 
@@ -90,8 +91,22 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
         pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true" + rec_pipeline_segment + " ! " + rec_caps + " ! " + enc + " ! queue name=__rec_q_enc__ max-size-buffers=30 max-size-time=0 max-size-bytes=0 ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
     }
 
-    if (!v->ros_camera_name.empty()) {
+    if (!this->ros_camera_name.empty()) {
         pstr += " __rec_t__. ! queue name=__ros_q__ max-size-buffers=2 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! video/x-raw,format=RGB ! appsink name=__ros_sink__ sync=false async=false emit-signals=true ";
+    }
+
+    // Warning for two sources but side_by_side setting missing
+    if (this->side_by_side == "undefined") {
+        size_t pos = 0;
+        int sources = 0;
+        while ((pos = v->stream.find("src", pos)) != std::string::npos) {
+            sources++;
+            pos += 3;
+        }
+        if (sources >= 2) {
+            std::cerr << "\033[1;33mWarning for stream \"" << v->name 
+                      << "\": Multiple sources detected but \"side_by_side\" setting is not present in the configuration.\033[0m" << std::endl;
+        }
     }
 
     this->pipeline_desc = pstr;
@@ -190,6 +205,7 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
         root["end_timestamp_ns"] = this->frames.empty() ? 0 : (Json::Value::Int64)this->frames.back().cpu_ts;
         root["frames_recorded"] = (int)this->frames_recorded;
         root["frames_dropped"] = (int)this->frames_dropped;
+        root["side_by_side"] = this->side_by_side;
         root["estimated_latency_ms"] = this->estimated_latency;
 
         Json::Value frame_list = Json::arrayValue;

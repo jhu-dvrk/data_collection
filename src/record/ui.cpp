@@ -303,7 +303,7 @@ void MainWindow::finalize_session() {
             root["config_files"] = configFiles;
 
             if (!m_data->session_event_tags.empty() || !m_data->session_stages.empty() || m_data->recording_start_cpu_ts > 0) {
-                root["session_tags_file"] = "tags.json";
+                root["session_tags_file"] = m_data->start_timestamp + "_tags.json";
             }
 
             Json::Value framesArr(Json::arrayValue);
@@ -422,14 +422,17 @@ void MainWindow::finalize_session() {
         }
 
         for (const auto& tag : m_data->session_event_tags) {
-            tagsObj[tag.first].append((Json::Value::Int64)tag.second);
+            Json::Value tag_obj(Json::objectValue);
+            tag_obj["cpu_ts"] = (Json::Value::Int64)tag.cpu_ts;
+            tag_obj["generated_at"] = tag.generated_at;
+            tagsObj[tag.name].append(tag_obj);
         }
 
         tagsRoot["generated_at"] = current_time_str;
         tagsRoot["stages"] = stagesArr;
         tagsRoot["tags"] = tagsObj;
 
-        std::string tags_path = m_data->session_dir + "/tags.json";
+        std::string tags_path = m_data->session_dir + "/" + m_data->start_timestamp + "_tags.json";
         std::ofstream os(tags_path);
         Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsRoot, &os);
@@ -557,14 +560,15 @@ void MainWindow::on_tag_clicked(const std::string& tag_name) {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+    std::string generated_at = dc::get_current_timestamp_iso8601();
 
     std::map<std::string, int> counts;
     {
         std::lock_guard<std::mutex> lock(m_data->data_mutex);
-        m_data->session_event_tags.push_back({tag_name, cpu_ts});
+        m_data->session_event_tags.push_back({tag_name, cpu_ts, generated_at});
 
         for (const auto& t : m_data->session_event_tags) {
-            counts[t.first]++;
+            counts[t.name]++;
         }
     }
 
