@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <numeric>
+#include <filesystem>
 
 #include "config.hpp"
 
@@ -341,7 +342,12 @@ int main(int argc, char* argv[]) {
     }
 
     if(config_path.empty()) {
-        std::cerr << "Usage: latency_c -c <config.json> [-s <stream_name>]" << std::endl;
+        std::cerr << "Usage: video_latency -c <config.json> [-s <stream_name>]" << std::endl;
+        return 1;
+    }
+
+    if (!std::filesystem::exists(config_path)) {
+        std::cerr << "CRITICAL: Config file does not exist: " << config_path << std::endl;
         return 1;
     }
 

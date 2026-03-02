@@ -1,0 +1,45 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Video Tags Metadata",
+    "type": "object",
+    "properties": {
+        "type": {
+            "type": "string",
+            "enum": ["dc::video_tags@1.0.0"]
+        },
+        "video_file": {
+            "type": "string"
+        },
+        "stages": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "start": { 
+                        "type": "object",
+                        "properties": {
+                            "cpu_ts": { "type": "integer" },
+                            "frame_idx": { "type": "integer" }
+                        }
+                    },
+                    "end": { 
+                        "type": "object",
+                        "properties": {
+                            "cpu_ts": { "type": "integer" },
+                            "frame_idx": { "type": "integer" }
+                        }
+                    }
+                },
+                "required": ["name"]
+            }
+        },
+        "tags": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": { "type": "integer" }
+            }
+        }
+    }
+}

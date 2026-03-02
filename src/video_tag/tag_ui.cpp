@@ -56,17 +56,6 @@ TagWindow::TagWindow(const std::string& video, const std::string&config, const s
     m_stats_label.set_alignment(0.0, 0.5);
     m_left_vbox.pack_start(m_stats_label, Gtk::PACK_SHRINK);
 
-    // Timeline Slider
-    m_timeline_hbox.pack_start(*Gtk::make_managed<Gtk::Label>("Time:"), Gtk::PACK_SHRINK);
-    m_timeline_slider.set_range(0, 100);
-    m_timeline_slider.set_draw_value(false);
-    m_timeline_slider.set_tooltip_text("Seek by time");
-    m_timeline_slider.signal_value_changed().connect(sigc::mem_fun(*this, &TagWindow::on_slider_moved));
-    m_timeline_hbox.pack_start(m_timeline_slider, Gtk::PACK_EXPAND_WIDGET);
-    m_duration_label.set_text("00:00:00 / 00:00:00");
-    m_timeline_hbox.pack_start(m_duration_label, Gtk::PACK_SHRINK);
-    m_left_vbox.pack_start(m_timeline_hbox, Gtk::PACK_SHRINK);
-
     // Frame Slider
     m_frame_hbox.pack_start(*Gtk::make_managed<Gtk::Label>("Frame:"), Gtk::PACK_SHRINK);
     m_frame_slider.set_range(0, 100);
@@ -74,8 +63,8 @@ TagWindow::TagWindow(const std::string& video, const std::string&config, const s
     m_frame_slider.set_tooltip_text("Seek by frame number");
     m_frame_slider.signal_value_changed().connect(sigc::mem_fun(*this, &TagWindow::on_frame_slider_moved));
     m_frame_hbox.pack_start(m_frame_slider, Gtk::PACK_EXPAND_WIDGET);
-    m_frame_label.set_text("0 / 0");
-    m_frame_label.set_width_chars(15);
+    m_frame_label.set_text("0 / 0 (00:00.000)");
+    m_frame_label.set_width_chars(25);
     m_frame_hbox.pack_start(m_frame_label, Gtk::PACK_SHRINK);
     m_left_vbox.pack_start(m_frame_hbox, Gtk::PACK_SHRINK);
 
@@ -87,17 +76,20 @@ TagWindow::TagWindow(const std::string& video, const std::string&config, const s
 
     m_prev_btn.set_label("Previous");
     m_prev_btn.set_tooltip_text("Previous frame (s)");
-    m_prev_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_prev_frame));
+    m_prev_btn.signal_pressed().connect(sigc::mem_fun(*this, &TagWindow::on_prev_btn_pressed));
+    m_prev_btn.signal_released().connect(sigc::mem_fun(*this, &TagWindow::on_prev_btn_released));
     m_controls_hbox.pack_start(m_prev_btn, Gtk::PACK_SHRINK);
 
     m_play_btn.set_label("Play");
     m_play_btn.set_tooltip_text("Play/Pause (d)");
+    m_play_btn.set_size_request(80, -1);
     m_play_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_play_pause));
     m_controls_hbox.pack_start(m_play_btn, Gtk::PACK_SHRINK);
 
     m_next_btn.set_label("Next");
     m_next_btn.set_tooltip_text("Next frame (f)");
-    m_next_btn.signal_clicked().connect(sigc::mem_fun(*this, &TagWindow::on_next_frame));
+    m_next_btn.signal_pressed().connect(sigc::mem_fun(*this, &TagWindow::on_next_btn_pressed));
+    m_next_btn.signal_released().connect(sigc::mem_fun(*this, &TagWindow::on_next_btn_released));
     m_controls_hbox.pack_start(m_next_btn, Gtk::PACK_SHRINK);
 
     m_speed_combo.append("0.1", "0.1x");
@@ -195,8 +187,12 @@ void TagWindow::load_config(const std::string& path) {
     if (path.empty()) return;
 
     Json::Value root;
-    if (!dc::Config::load_from_file(path, root)) return;
+    if (!dc::Config::load_from_file(path, root)) {
+        std::cerr << "Failed to load config: " << path << std::endl;
+        return;
+    }
 
+    // dc::Config::load_from_file already checks for dc_config_v1
     dc::AppConfig cfg = dc::Config::parse_app_config(root);
 
     for (const auto& s : cfg.stages) {
@@ -218,14 +214,16 @@ void TagWindow::load_sidecar_json() {
     if (dot != std::string::npos) base = base.substr(0, dot);
     std::string json_file = base + ".json";
 
-    std::ifstream ifs(json_file);
-    if (!ifs.is_open()) {
+    Json::Value root;
+    if (!dc::Config::load_from_file(json_file, root)) {
         std::cerr << "No sidecar JSON found at: " << json_file << std::endl;
         return;
     }
 
-    Json::Value root;
-    ifs >> root;
+    if (!dc::Config::check_type(root, "dc_sidecar_v1", json_file)) {
+        return;
+    }
+
     if (root.isMember("frames") && root["frames"].isArray()) {
         m_data.frame_cpu_timestamps.clear();
         m_data.frame_gst_timestamps.clear();
@@ -244,9 +242,10 @@ void TagWindow::load_sidecar_json() {
                 t = frame["gst_ts"].asInt64();
             }
 
-            if (first_gst_ts == -1) first_gst_ts = t;
-
-            m_data.frame_gst_timestamps.push_back(t - first_gst_ts);
+            // DO NOT SUBTRACT first_gst_ts. 
+            // GStreamer pipeline (qtdemux/h264parse) uses absolute file PTS.
+            // When we seek, we want to go to the exact PTS stored in the sidecar.
+            m_data.frame_gst_timestamps.push_back(t);
         }
     }
 
@@ -316,9 +315,13 @@ void TagWindow::setup_pipeline() {
     gint64 duration = 0;
     if (gst_element_query_duration(m_data.pipeline, GST_FORMAT_TIME, &duration)) {
         m_data.duration_ns = duration;
-        if (m_data.session_duration_ns == 0) m_data.session_duration_ns = duration;
-        m_duration_label.set_text(format_time(0) + " / " + format_time(m_data.session_duration_ns));
-        m_timeline_slider.set_range(0, (double)duration / 1e6);
+        
+        // Use recorded frame count based "virtual duration" for the UI if sidecar exists
+        if (!m_data.frame_gst_timestamps.empty()) {
+            m_data.session_duration_ns = (long long)((double)m_data.frame_gst_timestamps.size() / m_data.fps * 1e9);
+        } else if (m_data.session_duration_ns == 0) {
+            m_data.session_duration_ns = duration;
+        }
     }
 
     // Attempt to get FPS from sink caps
@@ -343,6 +346,18 @@ void TagWindow::setup_pipeline() {
 
     if (!m_data.frame_gst_timestamps.empty()) {
         m_data.total_frames = m_data.frame_gst_timestamps.size();
+
+        // Compute absolute indices based on FPS for reference
+        // This helps us know "This is frame #120 in the raw video file"
+        m_data.frame_abs_indices.clear();
+        for (long long ts : m_data.frame_gst_timestamps) {
+            long long idx = (long long)((double)ts / 1e9 * m_data.fps + 0.5); // Round
+            m_data.frame_abs_indices.push_back(idx);
+        }
+
+        m_data.current_frame = 0;
+        gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
+        do_seek(m_data.frame_gst_timestamps[0]);
     } else {
         m_data.total_frames = (long long)((double)m_data.duration_ns / 1e9 * m_data.fps);
     }
@@ -358,6 +373,25 @@ void TagWindow::do_seek(gint64 ns) {
                      GST_SEEK_TYPE_NONE, -1);
 }
 
+void TagWindow::seek_to_frame(long long frame_idx) {
+    if (frame_idx < 0) frame_idx = 0;
+    if (frame_idx >= m_data.total_frames) frame_idx = m_data.total_frames - 1;
+    
+    // Update state first
+    m_data.current_frame = frame_idx;
+    
+    // Convert to timestamp
+    gint64 target_ns = 0;
+    if (!m_data.frame_gst_timestamps.empty() && frame_idx < (long long)m_data.frame_gst_timestamps.size()) {
+        target_ns = m_data.frame_gst_timestamps[frame_idx];
+    } else {
+        // Fallback if no sidecar
+        target_ns = (gint64)((double)frame_idx / m_data.fps * 1e9);
+    }
+    
+    do_seek(target_ns);
+}
+
 void TagWindow::on_play_pause() {
     GstState current, pending;
     gst_element_get_state(m_data.pipeline, &current, &pending, 0);
@@ -365,6 +399,15 @@ void TagWindow::on_play_pause() {
         gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
         m_play_btn.set_label("Play");
     } else {
+        // If we are at the beginning or before the first frame, skip to first frame
+        if (!m_data.frame_gst_timestamps.empty()) {
+            gint64 pos = 0;
+            if (gst_element_query_position(m_data.pipeline, GST_FORMAT_TIME, &pos)) {
+                if (pos < m_data.frame_gst_timestamps[0]) {
+                    seek_to_frame(0);
+                }
+            }
+        }
         gst_element_set_state(m_data.pipeline, GST_STATE_PLAYING);
         m_play_btn.set_label("Pause");
         // Ensure speed is maintained
@@ -372,43 +415,49 @@ void TagWindow::on_play_pause() {
     }
 }
 
-long long TagWindow::frame_to_ns(long long frame) {
-    if (!m_data.frame_gst_timestamps.empty() && frame >= 0 && frame < (long long)m_data.frame_gst_timestamps.size()) {
-        return m_data.frame_gst_timestamps[frame];
+long long TagWindow::ns_to_nearest_frame(long long ns) {
+    if (m_data.frame_gst_timestamps.empty()) {
+        return (long long)((double)ns / 1e9 * m_data.fps);
     }
-    return (long long)((double)frame / m_data.fps * 1e9);
+    
+    // If we're before the first frame, return frame 0
+    if (ns <= m_data.frame_gst_timestamps.front()) return 0;
+    // If we're after the last frame, return the last frame index
+    if (ns >= m_data.frame_gst_timestamps.back()) return m_data.frame_gst_timestamps.size() - 1;
+
+    auto it = std::lower_bound(m_data.frame_gst_timestamps.begin(), m_data.frame_gst_timestamps.end(), ns);
+    if (it == m_data.frame_gst_timestamps.end()) return m_data.frame_gst_timestamps.size() - 1;
+    if (it == m_data.frame_gst_timestamps.begin()) return 0;
+
+    long long dist1 = std::abs((long long)*it - ns);
+    long long dist2 = std::abs((long long)*(it - 1) - ns);
+    if (dist1 < dist2) return std::distance(m_data.frame_gst_timestamps.begin(), it);
+    else return std::distance(m_data.frame_gst_timestamps.begin(), it - 1);
 }
 
 void TagWindow::on_begin() {
     if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
-    do_seek(frame_to_ns(0));
+    seek_to_frame(0);
 }
 
 void TagWindow::on_prev_frame() {
     if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
     long long next_frame = std::max(0LL, m_data.current_frame - 1);
-    do_seek(frame_to_ns(next_frame));
+    seek_to_frame(next_frame);
 }
 
 void TagWindow::on_next_frame() {
     if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
     long long max_frame = m_data.total_frames > 0 ? m_data.total_frames - 1 : 0;
     long long next_frame = std::min(max_frame, m_data.current_frame + 1);
-    do_seek(frame_to_ns(next_frame));
-}
-
-void TagWindow::on_slider_moved() {
-    if (m_internal_update) return;
-    if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
-    long long ns = (long long)(m_timeline_slider.get_value() * 1e6);
-    do_seek(ns);
+    seek_to_frame(next_frame);
 }
 
 void TagWindow::on_frame_slider_moved() {
     if (m_internal_update) return;
     if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
     long long frame = (long long)m_frame_slider.get_value();
-    do_seek(frame_to_ns(frame));
+    seek_to_frame(frame);
 }
 
 void TagWindow::on_speed_changed() {
@@ -446,9 +495,8 @@ void TagWindow::on_tag_jump(const std::string& tag_name) {
     if (id.empty()) return;
 
     long long frame = std::stoll(id);
-    m_data.current_frame = frame; // Update state immediately to prevent sync lag
     if (m_data.pipeline) gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
-    do_seek(frame_to_ns(frame));
+    seek_to_frame(frame);
 }
 
 void TagWindow::update_tag_navigation_ui() {
@@ -507,42 +555,106 @@ bool TagWindow::on_ui_update_timer() {
     if (gst_element_query_position(m_data.pipeline, GST_FORMAT_TIME, &pos)) {
         m_internal_update = true;
 
+        // Skip to the first frame if the current position is before it
+        if (!m_data.frame_gst_timestamps.empty() && pos < m_data.frame_gst_timestamps[0] - 10000000) {
+            seek_to_frame(0);
+            return true;
+        }
+
         // Update Play/Pause button label based on actual state
         GstState current, pending;
         gst_element_get_state(m_data.pipeline, &current, &pending, 0);
         if (current == GST_STATE_PLAYING) {
             m_play_btn.set_label("Pause");
+
+            // If playing, check if we need to skip to the next frame
+            if (!m_data.frame_gst_timestamps.empty()) {
+                gint64 current_frame_ts = m_data.frame_gst_timestamps[m_data.current_frame];
+                
+                // If GStreamer pos is significantly past the current recorded frame's expected timestamp,
+                // we are moving towards the next frame.
+                // If the next frame is contiguous, we do nothing.
+                // If there is a large gap, we must SEEK.
+                
+                // Look ahead: Where should the next frame be?
+                long long next_idx = m_data.current_frame + 1;
+                
+                if (next_idx < m_data.total_frames) {
+                    long long next_frame_ts = m_data.frame_gst_timestamps[next_idx];
+                    
+                    // Are we approaching or past the point where we should switch to next_idx?
+                    // Or are we adrift in a gap?
+                    
+                    // If pos > current + 10ms, we are "done" with current frame.
+                    if (pos > current_frame_ts + 10000000) {
+                        
+                        // Check if next frame is contiguous in ABSOLUTE index time
+                        bool is_contiguous = false;
+                        if (!m_data.frame_abs_indices.empty()) {
+                            long long cur_abs = m_data.frame_abs_indices[m_data.current_frame];
+                            long long next_abs = m_data.frame_abs_indices[next_idx];
+                            if (next_abs - cur_abs <= 1) is_contiguous = true;
+                        } else {
+                            // Fallback heuristic: timestamp difference is ~1 frame duration
+                            double frame_dur = 1e9 / m_data.fps;
+                            if (std::abs(next_frame_ts - current_frame_ts - frame_dur) < (frame_dur * 0.1)) {
+                                is_contiguous = true;
+                            }
+                        }
+                        
+                        if (is_contiguous) {
+                            // Smooth playback: Just update the index
+                            // Wait, if it's strictly contiguous, the timestamp should just be +1/FPS
+                            // But if we are past next_frame_ts itself, we should update index.
+                            if (pos >= next_frame_ts - 5000000) { // Within 5ms of next frame or past it
+                                m_data.current_frame = next_idx;
+                            }
+                        } else {
+                            // GAP DETECTED: Jump immediately to next_frame_ts
+                            // Only jump if we are NOT already close to it (to avoid loops)
+                            if (pos < next_frame_ts - 10000000) { // If we are BEFORE the target (in the gap)
+                                seek_to_frame(next_idx);
+                                return true;
+                            } else {
+                                // We are already past the gap target? Just update index
+                                m_data.current_frame = next_idx;
+                            }
+                        }
+                    }
+                } else {
+                     // End of recorded frames - pause if we run over
+                     if (pos > current_frame_ts + 50000000) {
+                        gst_element_set_state(m_data.pipeline, GST_STATE_PAUSED);
+                        m_play_btn.set_label("Play");
+                        seek_to_frame(m_data.total_frames - 1);
+                        return true;
+                     }
+                }
+            }
         } else {
             m_play_btn.set_label("Play");
         }
 
-        long long frame = 0;
-        if (!m_data.frame_gst_timestamps.empty()) {
-            auto it = std::lower_bound(m_data.frame_gst_timestamps.begin(), m_data.frame_gst_timestamps.end(), pos);
-            if (it == m_data.frame_gst_timestamps.end()) frame = m_data.frame_gst_timestamps.size() - 1;
-            else if (it == m_data.frame_gst_timestamps.begin()) frame = 0;
-            else {
-                long long dist1 = std::abs((long long)*it - pos);
-                long long dist2 = std::abs((long long)*(it - 1) - pos);
-                if (dist1 < dist2) frame = std::distance(m_data.frame_gst_timestamps.begin(), it);
-                else frame = std::distance(m_data.frame_gst_timestamps.begin(), it - 1);
-            }
-        } else {
-            frame = (long long)((double)pos / 1e9 * m_data.fps);
-        }
-
-        long long session_rel_ns = pos;
-        if (frame >= 0 && frame < (long long)m_data.frame_cpu_timestamps.size()) {
-            session_rel_ns = m_data.frame_cpu_timestamps[frame] - m_data.session_start_cpu_ns;
-        }
-
-        m_duration_label.set_text(format_time(session_rel_ns) + " / " + format_time(m_data.session_duration_ns));
-        m_timeline_slider.set_value((double)pos / 1e6);
+        long long frame = ns_to_nearest_frame(pos);
+        long long virtual_ms = (long long)((double)frame / m_data.fps * 1000.0);
+        long long total_ms = (long long)((double)(m_data.total_frames - 1) / m_data.fps * 1000.0);
+        
+        auto format_virtual_time = [](long long ms) {
+            int mins = ms / 60000;
+            double secs = (ms % 60000) / 1000.0;
+            std::stringstream ss;
+            ss << mins << ":" << std::fixed << std::setfill('0') << std::setw(6) << std::setprecision(3) << secs;
+            return ss.str();
+        };
+        
+        std::stringstream ss_frame;
+        ss_frame << frame << " / " << m_data.total_frames - 1 << " (" 
+                 << format_virtual_time(virtual_ms) << " / " << format_virtual_time(total_ms) << ")";
 
         if (frame != m_data.current_frame || true) { // Always refresh display labels to ensure consistency
             m_data.current_frame = frame;
             m_frame_slider.set_value(frame);
-            m_frame_label.set_text(std::to_string(frame) + " / " + std::to_string(m_data.total_frames));
+            m_frame_label.set_text(ss_frame.str());
 
             // Update current stages label
             std::map<std::string, int> starts;
@@ -591,6 +703,7 @@ bool TagWindow::on_key_press(GdkEventKey* event) {
     if (event->keyval == GDK_KEY_s) {
         if (!m_key_s_pressed) {
             m_key_s_pressed = true;
+            m_key_press_count = 1;
             on_prev_frame();
             if (!m_step_timer_conn.connected())
                 m_step_timer_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &TagWindow::on_step_timer), 200);
@@ -600,6 +713,7 @@ bool TagWindow::on_key_press(GdkEventKey* event) {
     if (event->keyval == GDK_KEY_f) {
         if (!m_key_f_pressed) {
             m_key_f_pressed = true;
+            m_key_press_count = 1;
             on_next_frame();
             if (!m_step_timer_conn.connected())
                 m_step_timer_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &TagWindow::on_step_timer), 200);
@@ -628,15 +742,47 @@ bool TagWindow::on_key_release(GdkEventKey* event) {
 }
 
 bool TagWindow::on_step_timer() {
-    if (m_key_s_pressed) {
+    if (m_key_s_pressed || m_btn_prev_pressed) {
+        m_key_press_count++;
         on_prev_frame();
+        if (m_key_press_count > 3) on_prev_frame(); // Double speed after 3 frames
         return true;
     }
-    if (m_key_f_pressed) {
+    if (m_key_f_pressed || m_btn_next_pressed) {
+        m_key_press_count++;
         on_next_frame();
+        if (m_key_press_count > 3) on_next_frame(); // Double speed after 3 frames
         return true;
     }
     return false; // Disconnect timer
+}
+
+void TagWindow::on_prev_btn_pressed() {
+    if (!m_btn_prev_pressed) {
+        m_btn_prev_pressed = true;
+        m_key_press_count = 1;
+        on_prev_frame();
+        if (!m_step_timer_conn.connected())
+            m_step_timer_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &TagWindow::on_step_timer), 200);
+    }
+}
+
+void TagWindow::on_prev_btn_released() {
+    m_btn_prev_pressed = false;
+}
+
+void TagWindow::on_next_btn_pressed() {
+    if (!m_btn_next_pressed) {
+        m_btn_next_pressed = true;
+        m_key_press_count = 1;
+        on_next_frame();
+        if (!m_step_timer_conn.connected())
+            m_step_timer_conn = Glib::signal_timeout().connect(sigc::mem_fun(*this, &TagWindow::on_step_timer), 200);
+    }
+}
+
+void TagWindow::on_next_btn_released() {
+    m_btn_next_pressed = false;
 }
 
 std::string TagWindow::format_time(long long ns) {
@@ -689,6 +835,8 @@ void TagWindow::save_tags() {
     }
 
     std::string current_time_str = dc::get_current_timestamp_iso8601();
+    root["type"] = "dc::video_tags@1.0.0";
+    root["created_at"] = current_time_str;
 
     for (auto const& [name, stage] : stage_map) {
         if (stage.start != -1 && stage.end != -1) {
@@ -907,14 +1055,16 @@ void TagWindow::load_session_tags() {
 
     std::cout << "Attempting to load session tags from: " << tags_json << std::endl;
 
-    std::ifstream ifs(tags_json);
-    if (!ifs.is_open()) {
+    Json::Value root;
+    if (!dc::Config::load_from_file(tags_json, root)) {
         std::cout << "No session tags found at: " << tags_json << std::endl;
         return;
     }
 
-    Json::Value root;
-    ifs >> root;
+    if (!dc::Config::check_type(root, "dc_session_tags_v1", tags_json)) {
+        return;
+    }
+
     std::cout << "Parsing unified tags.json..." << std::endl;
 
     auto find_frame = [&](long long ts) -> long long {

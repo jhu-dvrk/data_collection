@@ -20,6 +20,7 @@ struct TagData {
     // Mapping from frame index to CPU timestamp
     std::vector<long long> frame_cpu_timestamps;
     std::vector<long long> frame_gst_timestamps;
+    std::vector<long long> frame_abs_indices; // Computed absolute indices in source video
 
     bool unsaved_changes = false;
 
@@ -66,6 +67,7 @@ protected:
     void load_sidecar_json();
     void setup_pipeline();
     void do_seek(gint64 ns);
+    void seek_to_frame(long long frame_idx);
     void update_ui_state();
     void save_tags();
     void load_tags(const std::string& explicit_path = "");
@@ -75,7 +77,7 @@ protected:
     MissingTagsResult show_missing_tags_dialog(const std::vector<std::string>& missing_tags, const std::string& source);
     
     void update_tag_navigation_ui();
-    long long frame_to_ns(long long frame);
+    long long ns_to_nearest_frame(long long ns);
     std::string format_time(long long ns);
     std::string format_time_simple(double seconds);
 
@@ -85,7 +87,16 @@ protected:
 
     bool m_key_s_pressed = false;
     bool m_key_f_pressed = false;
+    bool m_btn_prev_pressed = false;
+    bool m_btn_next_pressed = false;
+    int m_key_press_count = 0;
     sigc::connection m_step_timer_conn;
+
+    // GUI Handlers
+    void on_prev_btn_pressed();
+    void on_prev_btn_released();
+    void on_next_btn_pressed();
+    void on_next_btn_released();
 
     // UI Widgets
     Gtk::Box m_main_hbox;

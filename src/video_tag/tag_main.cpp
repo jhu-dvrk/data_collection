@@ -2,6 +2,7 @@
 #include <gst/gst.h>
 #include <iostream>
 #include <string>
+#include <filesystem>
 #include "tag_ui.hpp"
 
 int main(int argc, char* argv[]) {
@@ -26,7 +27,23 @@ int main(int argc, char* argv[]) {
     }
 
     if (video_file.empty()) {
-        std::cerr << "Usage: tag_c -v <video_file> [-c <config_file>] [-t <tags_file>] [-T]" << std::endl;
+        std::cerr << "Usage: video_tag -v <video_file> [-c <config_file>] [-t <tags_file>] [-T]" << std::endl;
+        return 1;
+    }
+
+    // Existence checks
+    if (!std::filesystem::exists(video_file)) {
+        std::cerr << "CRITICAL: Video file does not exist: " << video_file << std::endl;
+        return 1;
+    }
+
+    if (!config_file.empty() && !std::filesystem::exists(config_file)) {
+        std::cerr << "CRITICAL: Config file does not exist: " << config_file << std::endl;
+        return 1;
+    }
+
+    if (!tags_file.empty() && !std::filesystem::exists(tags_file)) {
+        std::cerr << "CRITICAL: Specified tags file does not exist: " << tags_file << std::endl;
         return 1;
     }
 

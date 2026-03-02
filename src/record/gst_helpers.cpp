@@ -198,13 +198,9 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
                  if (gap > 0) as->total_offset_ns += gap;
             }
         }
-        as->last_raw_pts = pts;
-        as->last_duration = duration;
-        GST_BUFFER_PTS(buf) = pts - as->total_offset_ns;
-        if (GST_CLOCK_TIME_IS_VALID(GST_BUFFER_DTS(buf))) {
-             GST_BUFFER_DTS(buf) = GST_BUFFER_DTS(buf) - as->total_offset_ns;
-        }
-        long long gst_ts = GST_BUFFER_PTS(buf);
+        // Capture original PTS
+        long long gst_ts = pts;
+
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
@@ -225,22 +221,20 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
         long long pts = (long long)GST_BUFFER_PTS(buf);
         if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
         long long duration = (long long)GST_BUFFER_DURATION(buf);
+
+        // Debug: Log the jump if it is significant
         if (s->last_raw_pts != -1) {
             long long delta = pts - s->last_raw_pts;
-            if (delta > 500 * 1000000LL) {
+            if (delta > 500 * 1000000LL) { // 500ms threshold for offset correction
                  long long expected_gap = s->last_duration;
                  if (!GST_CLOCK_TIME_IS_VALID(expected_gap) || expected_gap == 0) expected_gap = 33333333LL;
                  long long gap = delta - expected_gap;
                  if (gap > 0) s->total_offset_ns += gap;
             }
         }
-        s->last_raw_pts = pts;
-        s->last_duration = duration;
-        GST_BUFFER_PTS(buf) = pts - s->total_offset_ns;
-        if (GST_CLOCK_TIME_IS_VALID(GST_BUFFER_DTS(buf))) {
-             GST_BUFFER_DTS(buf) = GST_BUFFER_DTS(buf) - s->total_offset_ns;
-        }
-        long long gst_ts = GST_BUFFER_PTS(buf);
+        // Capture original PTS
+        long long gst_ts = pts;
+
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;

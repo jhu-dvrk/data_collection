@@ -42,6 +42,7 @@ struct AppConfig {
 class Config {
 public:
     static bool load_from_file(const std::string& path, Json::Value& root);
+    static bool check_type(const Json::Value& root, const std::string& expected_type, const std::string& path);
     static std::vector<VideoConfig> parse_videos(const Json::Value& root);
     static AppConfig parse_app_config(const Json::Value& root);
 

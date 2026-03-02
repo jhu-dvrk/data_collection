@@ -4,19 +4,51 @@
 #include <set>
 #include <climits>
 #include <cstdlib>
+#include <map>
 
 namespace dc {
 
 bool Config::load_from_file(const std::string& path, Json::Value& root) {
     std::ifstream ifs(path);
     if (!ifs.is_open()) {
-        std::cerr << "Failed to open config: " << path << std::endl;
+        std::cerr << "Failed to open JSON: " << path << std::endl;
         return false;
     }
     try {
         ifs >> root;
     } catch (const std::exception& e) {
-        std::cerr << "JSON parse error: " << e.what() << std::endl;
+        std::cerr << "JSON parse error in " << path << ": " << e.what() << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool Config::check_type(const Json::Value& root, const std::string& expected_type, const std::string& path) {
+    if (!root.isMember("type")) {
+        std::cerr << "Error: JSON file '" << path << "' is missing the \"type\" field. "
+                  << "Expected \"" << expected_type << "\"." << std::endl;
+        return false;
+    }
+    std::string actual_type = root["type"].asString();
+    
+    // Support both old format (exact match) and new format (dc::tag@version)
+    if (actual_type != expected_type) {
+        // Mapping from old to new tags
+        static const std::map<std::string, std::string> type_map = {
+            {"dc_config_v1", "dc::config@1.0.0"},
+            {"dc_sidecar_v1", "dc::sidecar@1.0.0"},
+            {"dc_index_v1", "dc::index@1.0.0"},
+            {"dc_session_tags_v1", "dc::session_tags@1.0.0"},
+            {"dc_video_tags_v1", "dc::video_tags@1.0.0"}
+        };
+
+        auto it = type_map.find(expected_type);
+        if (it != type_map.end() && actual_type == it->second) {
+            return true;
+        }
+
+        std::cerr << "Error: Incompatible JSON type in '" << path << "'. "
+                  << "Found \"" << actual_type << "\", but expected \"" << expected_type << "\"." << std::endl;
         return false;
     }
     return true;
@@ -92,6 +124,10 @@ bool Config::load_recursive(const std::string& path,
 
     Json::Value root;
     if (!load_from_file(abs_path, root)) {
+        return false;
+    }
+
+    if (!check_type(root, "dc_config_v1", abs_path)) {
         return false;
     }
 

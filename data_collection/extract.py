@@ -224,6 +224,11 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=Non
         print(f"Error reading {json_path}: {e}")
         return
 
+    # Check for dc_sidecar_v1 type
+    if data.get("type") != "dc_sidecar_v1":
+        print(f"Warning: JSON file {json_path} does not have type 'dc_sidecar_v1'. "
+              f"Found: {data.get('type')}. Proceeding anyway.")
+
     video_filename = data.get("video_file")
     video_path = None
     if video_filename:
@@ -301,7 +306,15 @@ def main():
     formats = args.format if args.format else ['mp4']
     num_jobs = args.jobs or max(1, (os.cpu_count() or 1) // 2)
     
+    if not os.path.exists(args.directory):
+        print(f"CRITICAL: Session directory does not exist: {args.directory}")
+        sys.exit(1)
+
     index_path = os.path.join(args.directory, "index.json")
+    if not os.path.exists(index_path):
+        print(f"CRITICAL: index.json not found in {args.directory}")
+        sys.exit(1)
+
     with open(index_path, 'r') as f: index_data = json.load(f)
     
     videos = index_data.get("videos", [])

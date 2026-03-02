@@ -1,4 +1,5 @@
 {
+  "type": "dc::config@1.0.0",
 	"data_directory" : "data",
 	"videos" : 
 	[
@@ -12,7 +13,7 @@
 			"estimated_latency" : 0.1484626329,
 			"name" : "main_camera",
 			"ros_camera_name" : "main",
-			"tee_glimage_sink" : true,
+			// "tee_glimage_sink" : true,
 			"stream" : "v4l2src device=/dev/video0",
 			"timestamp_overlay" : true
 		}

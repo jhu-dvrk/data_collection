@@ -81,13 +81,10 @@ After building your workspace, run the record using ``ros2 run``:
 
     ros2 run data_collection record -c config.json
 
-Multiple configuration files can be loaded and merged. You can collect multiple video streams and multiple ROS topics defined in existing files (e.g. ``PSM1.json``). This allows users to re-use configuration files for each component used for a given experimental setup.
-
-.. code-block:: bash
-
-    ros2 run data_collection record -c PSM1.json -c PSM2.json -c SUJ.json -c video_config.json
-
 **Note:** Configuration file paths can be relative to your current working directory or absolute paths.
+The application will strictly check for the existence of all provided configuration files and abort with a CRITICAL error if any are missing.
+
+Multiple configuration files can be loaded and merged. You can collect multiple video streams and multiple ROS topics defined in existing files (e.g. ``PSM1.json``). This allows users to re-use configuration files for each component used for a given experimental setup.
 
 Stages Feature
 ~~~~~~~~~~~~~~
