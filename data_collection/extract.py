@@ -28,8 +28,8 @@ def parse_stage_timestamp(value):
     if value is None:
         return None, None
     if isinstance(value, dict):
-        # Prefer frame_absolute as requested
-        return value.get("cpu_ts"), value.get("frame_absolute")
+        # Use frame_relative which is the index into the frames array
+        return value.get("cpu_ts"), value.get("frame_relative")
     try:
         return int(value), None
     except (ValueError, TypeError):
@@ -199,6 +199,8 @@ def extract_video_range(video_path, output_path, start_frame, end_frame, fps, or
     if fps <= 0: fps = t_fps if t_fps > 0 else 30.0
 
     out = None
+    out_l = None
+    out_r = None
 
     if side_by_side in ["LR", "RL"]:
         base_path = os.path.splitext(output_path)[0]
@@ -206,41 +208,17 @@ def extract_video_range(video_path, output_path, start_frame, end_frame, fps, or
         out_r_path = f"{base_path}_right.mp4"
         
         half_width = width // 2
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         
-        # Setup crop parameters
-        # videocrop (left, right, top, bottom) remove pixels
-        # if LR: Left image is left half. To get Left: crop right by half_width.
-        #        Right image is right half. To get Right: crop left by half_width.
+        print(f"Splitting video into: {out_l_path} and {out_r_path}")
+        out_l = cv2.VideoWriter(out_l_path, fourcc, fps, (half_width, height))
+        out_r = cv2.VideoWriter(out_r_path, fourcc, fps, (half_width, height))
         
-        crop_l_left, crop_l_right = 0, half_width
-        crop_r_left, crop_r_right = half_width, 0
-        
-        if side_by_side == "RL":
-            # RL: Left image is on right. Right image is on left.
-            # Left output (from right half): crop left by half_width
-            # Right output (from left half): crop right by half_width
-            crop_l_left, crop_l_right = half_width, 0
-            crop_r_left, crop_r_right = 0, half_width
-        
-        # Construct GStreamer pipeline for VideoWriter
-        # Takes BGR frames from appsrc, splits, crops, encodes to TWO files.
-        gst_pipeline = (
-            f"appsrc ! videoconvert ! video/x-raw,format=BGR ! "
-            f"tee name=t "
-            f"t. ! videocrop top=0 bottom=0 left={crop_l_left} right={crop_l_right} ! "
-            f"videoconvert ! x264enc ! mp4mux ! filesink location=\"{out_l_path}\" "
-            f"t. ! videocrop top=0 bottom=0 left={crop_r_left} right={crop_r_right} ! "
-            f"videoconvert ! x264enc ! mp4mux ! filesink location=\"{out_r_path}\" "
-        )
-        
-        print(f"Using GStreamer pipeline for splitting/cropping: {gst_pipeline}")
-        
-        # Open VideoWriter with GStreamer backend. The size passed is INPUT frame size.
-        out = cv2.VideoWriter(gst_pipeline, cv2.CAP_GSTREAMER, 0, fps, (width, height))
-        
-        if not out.isOpened():
-             print("Error: Failed to open GStreamer pipeline via OpenCV. Ensure Gstreamer support is compiled.")
+        if not out_l.isOpened() or not out_r.isOpened():
+             print("Error: Failed to open output video files.")
              cap.release()
+             if out_l: out_l.release()
+             if out_r: out_r.release()
              return False
 
     else:
@@ -255,77 +233,96 @@ def extract_video_range(video_path, output_path, start_frame, end_frame, fps, or
     success = True
     try:
         def process_frame(f):
-            out.write(f)
+            if out:
+                out.write(f)
+            else:
+                # side_by_side processing
+                curr_w = f.shape[1]
+                hw = curr_w // 2
+                left_img = f[:, :hw]
+                right_img = f[:, hw:]
+                
+                if side_by_side == "RL":
+                     out_l.write(right_img)
+                     out_r.write(left_img)
+                else:
+                     out_l.write(left_img)
+                     out_r.write(right_img)
 
+        # Determine which frames to extract
         if original_indices is not None:
-            for idx in original_indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                ret, frame = cap.read()
-                if not ret: continue
-                process_frame(frame)
+            sorted_indices = sorted(list(set(original_indices)))
         else:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            for i in range(start_frame, end_frame + 1):
-                ret, frame = cap.read()
-                if not ret: break
-                process_frame(frame)
+            sorted_indices = list(range(start_frame, end_frame + 1))
+            
+        if not sorted_indices:
+            print("No frames to extract.")
+            return True
+
+        # Initial seek to the first desired frame
+        first_target = sorted_indices[0]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, first_target)
+        
+        # Verify seek: if we are at 0 but wanted something else, assume seek failure
+        # Note: CAP_PROP_POS_FRAMES is not always accurate, but 0 usually means reset.
+        current_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
+        if current_pos == 0 and first_target > 0:
+             print(f"Warning: Seek to frame {first_target} failed (pos={current_pos}). Fallback to manual skip.")
+             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+             current_pos = 0
+             while current_pos < first_target:
+                  if not cap.grab():
+                       print(f"Error: Could not skip to frame {first_target}.")
+                       break
+                  current_pos += 1
+        else:
+             # Assume seek succeeded, or we are at 0 and wanted 0
+             current_pos = first_target
+
+        for target_idx in sorted_indices:
+            # If we need to go forward
+            if target_idx > current_pos:
+                skip = target_idx - current_pos
+                # If gap is small, skip. If large, try seek (unless we know seek is broken?)
+                # For robustness, let's prefer skipping if it's reasonable (< 500 frames)
+                # or if we suspect seek is broken.
+                # Here we'll just skip to be safe and consistent.
+                for _ in range(skip):
+                    if not cap.grab():
+                        current_pos = -1 # invalidate
+                        break
+                    current_pos += 1
+            
+            # If we somehow need to go back (shouldn't happen with sorted list)
+            elif target_idx < current_pos:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+                current_pos = target_idx # Assume it works...
+            
+            if current_pos != target_idx:
+                 break
+                 
+            ret, frame = cap.read()
+            if not ret:
+                print(f"Error: Could not read frame {target_idx}")
+                break
+            
+            process_frame(frame)
+            current_pos += 1
+            
     except Exception as e:
         print(f"Error during extraction: {e}")
         success = False
     finally:
-        out.release()
+        if out: out.release()
+        if out_l: out_l.release()
+        if out_r: out_r.release()
         cap.release()
     
     return success
-    if not cap.isOpened(): return False
-    
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    
-    out_l, out_r = None, None
-    out = None
-    
-    if side_by_side in ["", "LR", "RL"]:
-        half_width = width // 2
-        base_path = os.path.splitext(output_path)[0]
-        out_l = cv2.VideoWriter(f"{base_path}_left.mp4", fourcc, fps, (half_width, height))
-        out_r = cv2.VideoWriter(f"{base_path}_right.mp4", fourcc, fps, (half_width, height))
-    else:
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    
-    def process_frame(f):
-        if side_by_side in ["", "LR", "RL"]:
-            left = f[:, :half_width]
-            right = f[:, half_width:]
-            if side_by_side == "RL":
-                left, right = right, left
-            out_l.write(left)
-            out_r.write(right)
-        else:
-            out.write(f)
 
-    if original_indices is not None:
-        for idx in original_indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ret, frame = cap.read()
-            if not ret: continue
-            process_frame(frame)
-    else:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        for i in range(start_frame, end_frame + 1):
-            ret, frame = cap.read()
-            if not ret: break
-            process_frame(frame)
-        
-    cap.release()
-    if out: out.release()
-    if out_l: out_l.release()
-    if out_r: out_r.release()
-    return True
 
-def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=None, end_acq=None, latency_s=0.0):
+
+def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=None, end_acq=None, latency_s=0.0, split_stereo=False):
     try:
         with open(json_path, 'r') as f: data = json.load(f)
     except Exception as e:
@@ -355,11 +352,13 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=Non
     timestamps = data.get("timestamps_ns", data.get("timestamps", data.get("timestamps_ms")))
     is_ns = "timestamps_ns" in data
     is_ms = "timestamps_ms" in data and not is_ns
+    gst_timestamps = None  # GStreamer timestamps for video frame mapping
 
     if not timestamps and "frames" in data:
         frames = data["frames"]
         if frames and isinstance(frames[0], dict):
             timestamps = [f.get("cpu_ts", f.get("gst_ts", 0)) for f in frames]
+            gst_timestamps = [f.get("gst_ts", 0) for f in frames]
             is_ns = True; is_ms = False
 
     if not timestamps: return
@@ -372,26 +371,36 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=Non
     
     if not indices: return
     
-    start_idx = indices[0]
-    end_idx = indices[-1]
+    # Calculate video frame indices from gst_ts if available
+    # gst_ts is in nanoseconds, convert to frame index using fps
+    video_fps = data.get("fps", 30.0)
+    if gst_timestamps:
+        video_indices = [round(gst_timestamps[i] * video_fps / 1e9) for i in indices]
+    else:
+        video_indices = indices  # Fallback: assume 1:1 mapping
+    
+    start_idx = video_indices[0]
+    end_idx = video_indices[-1]
     filtered_timestamps = [timestamps[i] for i in indices]
     video_basename = os.path.splitext(os.path.basename(video_path))[0]
     side_by_side = data.get("side_by_side", "undefined")
+    if not split_stereo:
+        side_by_side = "undefined"
     
     for fmt in formats:
         if fmt == 'mp4':
             fps = data.get("fps", 30.0)
             out_all_name = f"{video_basename}.mp4"
             print(f"Extracting video segment: {out_all_name}")
-            extract_video_range(video_path, os.path.join(output_dir, out_all_name), start_idx, end_idx, fps, indices, side_by_side)
+            extract_video_range(video_path, os.path.join(output_dir, out_all_name), start_idx, end_idx, fps, video_indices, side_by_side)
         else:
             tasks = []
-            chunk_size = math.ceil(len(indices) / num_jobs)
+            chunk_size = math.ceil(len(video_indices) / num_jobs)
             for i in range(num_jobs):
                 s = i * chunk_size
-                e = min((i + 1) * chunk_size, len(indices))
-                if s >= len(indices): break
-                tasks.append((video_path, output_dir, [filtered_timestamps[k] for k in range(s, e)], indices[s], fmt, video_basename, is_ns, is_ms, side_by_side))
+                e = min((i + 1) * chunk_size, len(video_indices))
+                if s >= len(video_indices): break
+                tasks.append((video_path, output_dir, [filtered_timestamps[k] for k in range(s, e)], video_indices[s], fmt, video_basename, is_ns, is_ms, side_by_side))
             
             if num_jobs > 1:
                 with multiprocessing.Pool(processes=num_jobs) as pool: pool.map(process_video_chunk, tasks)
@@ -405,6 +414,7 @@ def main():
     parser.add_argument("-a", "--all", action="store_true", help="Extract all data")
     parser.add_argument("-f", "--format", choices=['jpg', 'png', 'mp4'], action='append', help="Output format(s).")
     parser.add_argument("-j", "--jobs", type=int)
+    parser.add_argument("-S", "--split-stereo", action="store_true", help="Split stereo video streams (LR/RL) into two channels")
     args = parser.parse_args()
 
     if not args.tags and not args.all:
@@ -465,6 +475,11 @@ def main():
                             v_data = json.load(vf)
                             source_v_latency = v_data.get("estimated_latency", 0.0)
                             source_v_ts = v_data.get("timestamps_ns", v_data.get("timestamps", []))
+                            # Also handle "frames" format
+                            if not source_v_ts and "frames" in v_data:
+                                frames = v_data["frames"]
+                                if frames and isinstance(frames[0], dict):
+                                    source_v_ts = [f.get("cpu_ts", f.get("gst_ts", 0)) for f in frames]
                     break
 
         stage_counts = {}
@@ -498,7 +513,7 @@ def main():
             v_base = os.path.splitext(v["file"])[0]
             v_json = os.path.join(args.directory, f"{v_base}.json")
             if os.path.exists(v_json):
-                extract_session_data(v_json, target_dir, formats, num_jobs, target["start"], target["end"])
+                extract_session_data(v_json, target_dir, formats, num_jobs, target["start"], target["end"], split_stereo=args.split_stereo)
         
         if rosbag_name:
             bag_path = os.path.join(args.directory, rosbag_name)

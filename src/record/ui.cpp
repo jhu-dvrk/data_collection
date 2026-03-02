@@ -307,7 +307,7 @@ void MainWindow::finalize_session() {
             root["config_files"] = configFiles;
 
             if (!m_data->session_event_tags.empty() || !m_data->session_stages.empty() || m_data->recording_start_cpu_ts > 0) {
-                root["session_tags_file"] = "tags.json";
+                root["session_tags_file"] = "session_tags.json";
             }
 
             Json::Value framesArr(Json::arrayValue);
@@ -319,6 +319,7 @@ void MainWindow::finalize_session() {
             }
             root["frames"] = framesArr;
             root["estimated_latency"] = s->estimated_latency;
+            root["side_by_side"] = s->side_by_side;
 
             std::ofstream os(s->output_json); Json::StreamWriterBuilder b;
             std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
@@ -438,7 +439,7 @@ void MainWindow::finalize_session() {
         tagsRoot["stages"] = stagesArr;
         tagsRoot["tags"] = tagsObj;
 
-        std::string tags_path = m_data->session_dir + "/tags.json";
+        std::string tags_path = m_data->session_dir + "/session_tags.json";
         std::ofstream os(tags_path);
         Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsRoot, &os);
