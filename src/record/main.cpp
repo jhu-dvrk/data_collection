@@ -175,7 +175,7 @@ int main(int argc, char *argv[]) {
 
     // Initialize ROS bag for the session
     if (!data.ros_topics.empty()) {
-        data.session_bag_path = data.session_dir + "/rosbag_" + data.start_timestamp;
+        data.session_bag_path = data.session_dir + "/rosbag";
         open_bag_writer(&data, data.session_bag_path);
     }
 

@@ -14,11 +14,26 @@ import re
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 from rosidl_runtime_py.convert import message_to_ordereddict
-from .common import parse_stage_timestamp
+from .common import get_current_timestamp_iso8601
 
-def natural_sort_key(s):
-    return [int(text) if text.isdigit() else text.lower()
-            for text in re.split('([0-9]+)', s)]
+
+def parse_stage_timestamp(value):
+    """
+    Parses a stage timestamp from a JSON value.
+    Handles legacy integer format and new object format.
+    
+    Returns:
+        tuple: (cpu_ts, frame). Either or both can be None.
+    """
+    if value is None:
+        return None, None
+    if isinstance(value, dict):
+        # Prefer frame_absolute as requested
+        return value.get("cpu_ts"), value.get("frame_absolute")
+    try:
+        return int(value), None
+    except (ValueError, TypeError):
+        return None, None
 
 def flatten_dict(d, parent_key='', sep='.'):
     items = []
@@ -33,6 +48,9 @@ def flatten_dict(d, parent_key='', sep='.'):
     else:
         items.append((parent_key, d))
     return dict(items)
+
+def extract_video_chunk(args_tuple):
+    video_path, output_dir, timestamps, start_frame_idx, output_format, video_basename, is_ns, is_ms, side_by_side = args_tuple
 
 def detect_rosbag_format(bag_path):
     if os.path.isdir(bag_path):
@@ -158,8 +176,8 @@ def process_video_chunk(args):
             if side_by_side == "RL":
                 left, right = right, left
                 
-            cv2.imwrite(os.path.join(output_dir, f"{video_basename}L_{ts_str}.{output_format}"), left)
-            cv2.imwrite(os.path.join(output_dir, f"{video_basename}R_{ts_str}.{output_format}"), right)
+            cv2.imwrite(os.path.join(output_dir, f"{video_basename}_left_{ts_str}.{output_format}"), left)
+            cv2.imwrite(os.path.join(output_dir, f"{video_basename}_right_{ts_str}.{output_format}"), right)
         else:
             image_name = f"{video_basename}_{ts_str}.{output_format}"
             cv2.imwrite(os.path.join(output_dir, image_name), frame)
@@ -169,6 +187,96 @@ def process_video_chunk(args):
 
 def extract_video_range(video_path, output_path, start_frame, end_frame, fps, original_indices=None, side_by_side="undefined"):
     cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Error: Could not open video file {video_path}")
+        return False
+    
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    # If using OpenCV loop, this fps setting is for the output
+    t_fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0: fps = t_fps if t_fps > 0 else 30.0
+
+    out = None
+
+    if side_by_side in ["LR", "RL"]:
+        base_path = os.path.splitext(output_path)[0]
+        out_l_path = f"{base_path}_left.mp4"
+        out_r_path = f"{base_path}_right.mp4"
+        
+        half_width = width // 2
+        
+        # Setup crop parameters
+        # videocrop (left, right, top, bottom) remove pixels
+        # if LR: Left image is left half. To get Left: crop right by half_width.
+        #        Right image is right half. To get Right: crop left by half_width.
+        
+        crop_l_left, crop_l_right = 0, half_width
+        crop_r_left, crop_r_right = half_width, 0
+        
+        if side_by_side == "RL":
+            # RL: Left image is on right. Right image is on left.
+            # Left output (from right half): crop left by half_width
+            # Right output (from left half): crop right by half_width
+            crop_l_left, crop_l_right = half_width, 0
+            crop_r_left, crop_r_right = 0, half_width
+        
+        # Construct GStreamer pipeline for VideoWriter
+        # Takes BGR frames from appsrc, splits, crops, encodes to TWO files.
+        gst_pipeline = (
+            f"appsrc ! videoconvert ! video/x-raw,format=BGR ! "
+            f"tee name=t "
+            f"t. ! videocrop top=0 bottom=0 left={crop_l_left} right={crop_l_right} ! "
+            f"videoconvert ! x264enc ! mp4mux ! filesink location=\"{out_l_path}\" "
+            f"t. ! videocrop top=0 bottom=0 left={crop_r_left} right={crop_r_right} ! "
+            f"videoconvert ! x264enc ! mp4mux ! filesink location=\"{out_r_path}\" "
+        )
+        
+        print(f"Using GStreamer pipeline for splitting/cropping: {gst_pipeline}")
+        
+        # Open VideoWriter with GStreamer backend. The size passed is INPUT frame size.
+        out = cv2.VideoWriter(gst_pipeline, cv2.CAP_GSTREAMER, 0, fps, (width, height))
+        
+        if not out.isOpened():
+             print("Error: Failed to open GStreamer pipeline via OpenCV. Ensure Gstreamer support is compiled.")
+             cap.release()
+             return False
+
+    else:
+        # Standard mono output using standard MP4 writer (or GStreamer equivalent)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if not out.isOpened():
+            cap.release()
+            return False
+
+    # Process frames
+    success = True
+    try:
+        def process_frame(f):
+            out.write(f)
+
+        if original_indices is not None:
+            for idx in original_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ret, frame = cap.read()
+                if not ret: continue
+                process_frame(frame)
+        else:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            for i in range(start_frame, end_frame + 1):
+                ret, frame = cap.read()
+                if not ret: break
+                process_frame(frame)
+    except Exception as e:
+        print(f"Error during extraction: {e}")
+        success = False
+    finally:
+        out.release()
+        cap.release()
+    
+    return success
     if not cap.isOpened(): return False
     
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -182,8 +290,8 @@ def extract_video_range(video_path, output_path, start_frame, end_frame, fps, or
     if side_by_side in ["", "LR", "RL"]:
         half_width = width // 2
         base_path = os.path.splitext(output_path)[0]
-        out_l = cv2.VideoWriter(f"{base_path}L.mp4", fourcc, fps, (half_width, height))
-        out_r = cv2.VideoWriter(f"{base_path}R.mp4", fourcc, fps, (half_width, height))
+        out_l = cv2.VideoWriter(f"{base_path}_left.mp4", fourcc, fps, (half_width, height))
+        out_r = cv2.VideoWriter(f"{base_path}_right.mp4", fourcc, fps, (half_width, height))
     else:
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
@@ -224,9 +332,9 @@ def extract_session_data(json_path, output_dir, formats, num_jobs, start_acq=Non
         print(f"Error reading {json_path}: {e}")
         return
 
-    # Check for dc_sidecar_v1 type
-    if data.get("type") != "dc_sidecar_v1":
-        print(f"Warning: JSON file {json_path} does not have type 'dc_sidecar_v1'. "
+    # Check for dc_sidecar_v1 or dc::sidecar@1.0.0 type
+    if data.get("type") not in ["dc_sidecar_v1", "dc::sidecar@1.0.0"]:
+        print(f"Warning: JSON file {json_path} does not have type 'dc_sidecar_v1' or 'dc::sidecar@1.0.0'. "
               f"Found: {data.get('type')}. Proceeding anyway.")
 
     video_filename = data.get("video_file")
@@ -327,9 +435,23 @@ def main():
     if args.all:
         extraction_targets.append({"name": "full_session", "start": None, "end": None})
     if args.tags:
-        tags_path = args.tags if os.path.isabs(args.tags) else os.path.join(args.directory, args.tags)
+        tags_path = args.tags
+        if not os.path.exists(tags_path):
+            tags_path = os.path.join(args.directory, os.path.basename(args.tags))
+            if not os.path.exists(tags_path):
+                print(f"CRITICAL: Tag file not found: {args.tags} (also checked {tags_path})")
+                sys.exit(1)
         with open(tags_path, 'r') as f: tags_data = json.load(f)
         
+        tags_type = tags_data.get("type", "unknown")
+        if tags_type not in ["dc::video_tags@1.0.0", "dc::session_tags@1.0.0"]:
+             print(f"CRITICAL: Unsupported tags type: {tags_type}")
+             sys.exit(1)
+        
+        if tags_type == "dc::session_tags@1.0.0":
+             print("CRITICAL: Session tags are not yet supported for extraction.")
+             sys.exit(1)
+
         source_v_name = tags_data.get("video_file")
         source_v_latency = 0.0
         source_v_ts = []
@@ -370,7 +492,7 @@ def main():
     for target in extraction_targets:
         target_dir = os.path.join(base_extracted_dir, target["name"])
         os.makedirs(target_dir, exist_ok=True)
-        print(f"Processing target: {target['name']}")
+        print(f"Processing target: {target['name']} (start={target['start']}, end={target['end']})")
         
         for v in videos:
             v_base = os.path.splitext(v["file"])[0]

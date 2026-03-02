@@ -1,4 +1,5 @@
 {
+  "type": "dc::config@1.0.0",
   "ros_topics": [
     "/MTML/measured_cp",
     "/MTML/measured_cv",
@@ -7,5 +8,6 @@
     "/MTML/gripper/measured_js",
     "/MTML/gripper/setpoint_js",
     "/MTML/local/measured_cp",
-    "/MTML/local/measured_cv"]
+    "/MTML/local/measured_cv"
+  ]
 }

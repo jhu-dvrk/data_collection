@@ -1,20 +1,18 @@
 {
   "type": "dc::config@1.0.0",
-	"data_directory" : "data",
-	"videos" : 
-	[
-		{
-			"encoding" : 
-			{
-				"bitrate" : 20000,
-				"frame_rate" : 60,
-				"height" : 640,
-				"width" : 960
-			},
-			"estimated_latency" : 0.091099309599999997,
-			"name" : "AnkerWork_C310",
-			"record" : true,
-			"stream" : "v4l2src device=/dev/video4 ! image/jpeg,width=1920,height=1080,framerate=60/1 ! jpegdec ! videoconvert"
-		}
-	]
+  "data_directory": "data",
+  "videos": [
+    {
+      "encoding": {
+        "bitrate": 20000,
+        "frame_rate": 60,
+        "height": 640,
+        "width": 960
+      },
+      "estimated_latency": 0.0910993096,
+      "name": "AnkerWork_C310",
+      "record": true,
+      "stream": "v4l2src device=/dev/video4 ! image/jpeg,width=1920,height=1080,framerate=60/1 ! jpegdec ! videoconvert"
+    }
+  ]
 }

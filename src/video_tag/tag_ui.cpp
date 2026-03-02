@@ -220,7 +220,7 @@ void TagWindow::load_sidecar_json() {
         return;
     }
 
-    if (!dc::Config::check_type(root, "dc_sidecar_v1", json_file)) {
+    if (!dc::Config::check_type(root, "dc::sidecar@1.0.0", json_file)) {
         return;
     }
 
@@ -816,21 +816,49 @@ void TagWindow::save_tags() {
         long long start = -1;
         long long end = -1;
     };
-    std::map<std::string, Stage> stage_map;
+    // Support multiple stages with same name using a list
+    std::vector<Stage> stage_list;
+    // Map to track open stage starts: name -> stack of start frames
+    std::map<std::string, std::vector<long long>> open_starts;
+    std::vector<std::string> error_messages;
 
     for (auto const& [frame, tags] : m_data.frame_tags) {
         for (auto const& t : tags) {
             if (t.find("_start") != std::string::npos) {
                 std::string name = t.substr(0, t.length() - 6);
-                stage_map[name].name = name;
-                stage_map[name].start = frame;
+                if (!open_starts[name].empty()) {
+                     std::string error_msg = "Error: Stage '" + name + "' overlaps with itself! (Start at " + 
+                                            format_time( (long long)((double)open_starts[name].back() / m_data.fps * 1e9) ) + 
+                                            " and " + format_time( (long long)((double)frame / m_data.fps * 1e9) ) + ")";
+                     error_messages.push_back(error_msg); 
+                }
+                open_starts[name].push_back(frame);
             } else if (t.find("_end") != std::string::npos) {
                 std::string name = t.substr(0, t.length() - 4);
-                stage_map[name].name = name;
-                stage_map[name].end = frame;
+                if (!open_starts[name].empty()) {
+                    long long start = open_starts[name].back();
+                    open_starts[name].pop_back();
+                    stage_list.push_back({name, start, frame});
+                } else {
+                    // End without start - treat as disconnected end
+                    Stage s; 
+                    s.name = name; 
+                    s.end = frame;
+                    stage_list.push_back(s);
+                }
             } else {
                 tags_obj[t].append((Json::Int64)frame);
             }
+        }
+    }
+
+    // Add remaining open starts
+    for (auto& [name, starts] : open_starts) {
+        for (long long s : starts) {
+            Stage stage;
+            stage.name = name;
+            stage.start = s;
+            stage_list.push_back(stage);
         }
     }
 
@@ -838,7 +866,8 @@ void TagWindow::save_tags() {
     root["type"] = "dc::video_tags@1.0.0";
     root["created_at"] = current_time_str;
 
-    for (auto const& [name, stage] : stage_map) {
+    for (auto const& stage : stage_list) {
+        std::string name = stage.name;
         if (stage.start != -1 && stage.end != -1) {
             Json::Value stage_entry;
             stage_entry["name"] = name;
@@ -855,11 +884,21 @@ void TagWindow::save_tags() {
             }
 
             Json::Value start_obj;
-            start_obj["frame"] = (Json::Int64)s_frame;
+            // frame_absolute: 0-based index in this specific video file
+            // frame_relative: Same for now, unless we have session offset logic
+            start_obj["frame_absolute"] = (Json::Int64)((s_frame >= 0 && s_frame < (long long)m_data.frame_abs_indices.size()) ? m_data.frame_abs_indices[s_frame] : s_frame);
+            start_obj["frame_relative"] = (Json::Int64)s_frame;
+            if (s_frame >= 0 && s_frame < (long long)m_data.frame_cpu_timestamps.size()) {
+                start_obj["cpu_ts"] = (Json::Int64)m_data.frame_cpu_timestamps[s_frame];
+            }
             start_obj["generated_at"] = current_time_str;
             
             Json::Value end_obj;
-            end_obj["frame"] = (Json::Int64)e_frame;
+            end_obj["frame_absolute"] = (Json::Int64)((e_frame >= 0 && e_frame < (long long)m_data.frame_abs_indices.size()) ? m_data.frame_abs_indices[e_frame] : e_frame);
+            end_obj["frame_relative"] = (Json::Int64)e_frame;
+            if (e_frame >= 0 && e_frame < (long long)m_data.frame_cpu_timestamps.size()) {
+                end_obj["cpu_ts"] = (Json::Int64)m_data.frame_cpu_timestamps[e_frame];
+            }
             end_obj["generated_at"] = current_time_str;
 
             stage_entry["start"] = start_obj;
@@ -870,7 +909,19 @@ void TagWindow::save_tags() {
             std::string error_msg = "Error: Stage '" + name + "' is " + status + ". Not saved.";
             std::cerr << error_msg << std::endl;
             m_info_label.set_text(error_msg);
+            error_messages.push_back(error_msg);
         }
+    }
+
+    if (!error_messages.empty()) {
+        std::string full_msg = "";
+        for (const auto& msg : error_messages) {
+            full_msg += msg + "\n";
+        }
+        Gtk::MessageDialog dialog(*this, "Stage Error", false, Gtk::MESSAGE_ERROR, Gtk::BUTTONS_OK, true);
+        dialog.set_secondary_text(full_msg);
+        dialog.run();
+        return;
     }
 
     root["stages"] = stages_array;
@@ -890,6 +941,7 @@ void TagWindow::save_tags() {
 
     m_data.unsaved_changes = false;
     m_info_label.set_text("Saved tags to " + tags_file);
+    std::cout << "Saved tags to: " << tags_file << std::endl;
 }
 
 void TagWindow::load_tags(const std::string& explicit_path) {
@@ -969,13 +1021,27 @@ void TagWindow::load_tags(const std::string& explicit_path) {
             std::string name = s["name"].asString();
             if (m_tag_buttons.count(name + "_start") == 0 || m_tag_buttons.count(name + "_end") == 0) continue;
 
-            long long start_ts = dc::parse_stage_timestamp(s["start"]);
-            long long end_ts = dc::parse_stage_timestamp(s["end"]);
+            auto get_frame = [&](const Json::Value& v) -> long long {
+                if (v.isObject()) {
+                    // Priority 1: Use timestamp map if available and cpu_ts is present
+                    if (!m_data.frame_cpu_timestamps.empty() && v.isMember("cpu_ts")) {
+                        return find_frame(v["cpu_ts"].asInt64());
+                    }
+                    // Priority 2: Use absolute frame index
+                    if (v.isMember("frame_absolute")) {
+                        return v["frame_absolute"].asInt64();
+                    }
+                }
+                return -1;
+            };
 
-            long long start = find_frame(start_ts);
-            long long end = find_frame(end_ts);
-            m_data.frame_tags[start].push_back(name + "_start");
-            m_data.frame_tags[end].push_back(name + "_end");
+            long long start_f = get_frame(s["start"]);
+            long long end_f = get_frame(s["end"]);
+
+            if (start_f >= 0 && start_f < m_data.total_frames)
+                m_data.frame_tags[start_f].push_back(name + "_start");
+            if (end_f >= 0 && end_f < m_data.total_frames)
+                m_data.frame_tags[end_f].push_back(name + "_end");
         }
     }
 

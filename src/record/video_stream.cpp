@@ -170,8 +170,8 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     }
 
     // Set output paths from session data
-    this->output_video = ad->session_dir + "/" + sn + "_" + ad->start_timestamp + ".mp4";
-    this->output_json  = ad->session_dir + "/" + sn + "_" + ad->start_timestamp + ".json";
+    this->output_video = ad->session_dir + "/" + sn + ".mp4";
+    this->output_json  = ad->session_dir + "/" + sn + ".json";
     GstElement *fsink = gst_bin_get_by_name(GST_BIN(this->pipeline), "__rec_filesink__");
     if (fsink) {
         g_object_set(fsink, "location", this->output_video.c_str(), NULL);

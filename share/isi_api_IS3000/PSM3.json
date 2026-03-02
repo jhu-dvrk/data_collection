@@ -1,4 +1,5 @@
 {
+  "type": "dc::config@1.0.0",
   "ros_topics": [
     "/PSM3/measured_js",
     "/PSM3/measured_cp",

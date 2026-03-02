@@ -1,4 +1,5 @@
 {
+  "type": "dc::config@1.0.0",
   "ros_topics": [
     "/PSM1/measured_cp",
     "/PSM1/measured_cv",
@@ -7,5 +8,6 @@
     "/PSM1/jaw/measured_js",
     "/PSM1/jaw/setpoint_js",
     "/PSM1/local/measured_cp",
-    "/PSM1/local/measured_cv"]
+    "/PSM1/local/measured_cv"
+  ]
 }

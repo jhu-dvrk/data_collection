@@ -1,9 +1,11 @@
 {
+  "type": "dc::config@1.0.0",
   "ros_topics": [
     "/ECM/measured_cp",
     "/ECM/measured_cv",
     "/ECM/setpoint_cp",
     "/ECM/setpoint_cv",
     "/ECM/local/measured_cp",
-    "/ECM/local/measured_cv"]
+    "/ECM/local/measured_cv"
+  ]
 }

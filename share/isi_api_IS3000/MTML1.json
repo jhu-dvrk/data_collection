@@ -1,4 +1,5 @@
 {
+  "type": "dc::config@1.0.0",
   "ros_topics": [
     "/MTML1/measured_js",
     "/MTML1/measured_cp",

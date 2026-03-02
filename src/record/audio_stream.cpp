@@ -63,8 +63,8 @@ bool AudioStream::create(AppData* ad) {
     }
 
     // Set output paths from session data
-    this->output_audio = ad->session_dir + "/audio_" + ad->start_timestamp + ".wav";
-    this->output_json  = ad->session_dir + "/audio_" + ad->start_timestamp + ".json";
+    this->output_audio = ad->session_dir + "/audio.wav";
+    this->output_json  = ad->session_dir + "/audio.json";
 
     GstElement *asink = gst_bin_get_by_name(GST_BIN(this->pipeline), "asink");
     if (asink) {

@@ -271,7 +271,7 @@ void MainWindow::finalize_session() {
         Json::Value root; 
         root["type"] = "dc::sidecar@1.0.0";
         root["name"] = "audio";
-        root["audio_file"] = "audio_" + m_data->start_timestamp + ".wav";
+        root["audio_file"] = "audio.wav";
         root["gstreamer_pipeline"] = m_data->audio_stream->pipeline_desc;
 
         Json::Value configFiles(Json::arrayValue);
@@ -307,7 +307,7 @@ void MainWindow::finalize_session() {
             root["config_files"] = configFiles;
 
             if (!m_data->session_event_tags.empty() || !m_data->session_stages.empty() || m_data->recording_start_cpu_ts > 0) {
-                root["session_tags_file"] = m_data->start_timestamp + "_tags.json";
+                root["session_tags_file"] = "tags.json";
             }
 
             Json::Value framesArr(Json::arrayValue);
@@ -345,7 +345,7 @@ void MainWindow::finalize_session() {
 
         if (m_data->audio_stream && !m_data->audio_stream->frames.empty()) {
              Json::Value aud;
-             std::string fname = "audio_" + m_data->start_timestamp + ".wav";
+             std::string fname = "audio.wav";
              aud["file"] = fname;
              double duration = 0.0;
              const auto& af = m_data->audio_stream->frames;
@@ -438,7 +438,7 @@ void MainWindow::finalize_session() {
         tagsRoot["stages"] = stagesArr;
         tagsRoot["tags"] = tagsObj;
 
-        std::string tags_path = m_data->session_dir + "/" + m_data->start_timestamp + "_tags.json";
+        std::string tags_path = m_data->session_dir + "/tags.json";
         std::ofstream os(tags_path);
         Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsRoot, &os);
