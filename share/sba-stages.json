@@ -1,4 +1,5 @@
 {
+  "type": "dc::config@1.0.0",
   "stages": [
       "lift_right_enteronomy",
       "insert_cartridge_10mm",

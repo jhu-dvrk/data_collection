@@ -185,6 +185,7 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
 
     if (this->record_enabled && !this->output_json.empty()) {
         Json::Value root;
+        root["type"] = "dc::sidecar@1.0.0";
         root["stream_name"] = this->name;
         root["start_timestamp_ns"] = this->frames.empty() ? 0 : (Json::Value::Int64)this->frames.front().cpu_ts;
         root["end_timestamp_ns"] = this->frames.empty() ? 0 : (Json::Value::Int64)this->frames.back().cpu_ts;

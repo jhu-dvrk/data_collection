@@ -71,20 +71,23 @@ int main(int argc, char *argv[]) {
             if (app_max_threads < 1) app_max_threads = 1;
         } else if (arg == "-p" && i+1 < argc) {
             data.trigger_topic = argv[++i];
-        } else if (arg[0] != '-') {
-            char *abs_path = realpath(argv[i], NULL);
-            if (abs_path) {
-                data.config_files.push_back(abs_path);
-                free(abs_path);
-            } else {
-                data.config_files.push_back(argv[i]);
-            }
-            configs.push_back(data.config_files.back());
+        } else {
+            std::cerr << "Error: Unknown argument or missing -c for config: " << arg << std::endl;
+            std::cerr << "Usage: " << argv[0] << " -c <config.json> [-j <threads>] [-p <trigger_topic>]" << std::endl;
+            return 1;
         }
     }
     if (configs.empty()) {
         std::cerr << "Usage: " << argv[0] << " -c <scan_config.json> [options]" << std::endl;
         return 1;
+    }
+
+    // Existence checks for config files
+    for (const auto& cfg : data.config_files) {
+        if (!std::filesystem::exists(cfg)) {
+            std::cerr << "CRITICAL: Config file does not exist: " << cfg << std::endl;
+            return 1;
+        }
     }
 
     // ROS 2 Initialization

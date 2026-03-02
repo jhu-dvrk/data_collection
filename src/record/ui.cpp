@@ -268,7 +268,9 @@ void MainWindow::finalize_session() {
     for (auto s : m_data->streams) s->shutdown();
 
     if (m_data->audio_stream && !m_data->audio_stream->frames.empty()) {
-        Json::Value root; root["name"] = "audio";
+        Json::Value root; 
+        root["type"] = "dc::sidecar@1.0.0";
+        root["name"] = "audio";
         root["audio_file"] = "audio_" + m_data->start_timestamp + ".wav";
         root["gstreamer_pipeline"] = m_data->audio_stream->pipeline_desc;
 
@@ -291,7 +293,9 @@ void MainWindow::finalize_session() {
 
     for (auto s : m_data->streams) {
         if (!s->frames.empty()) {
-            Json::Value root; root["name"] = s->name;
+            Json::Value root; 
+            root["type"] = "dc::sidecar@1.0.0";
+            root["name"] = s->name;
             root["video_file"] = s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
             root["gstreamer_pipeline"] = s->pipeline_desc;
 
@@ -324,6 +328,7 @@ void MainWindow::finalize_session() {
     // Write index.json
     if (!m_data->streams.empty() || (m_data->audio_stream && !m_data->audio_stream->frames.empty())) {
         Json::Value indexRoot;
+        indexRoot["type"] = "dc::index@1.0.0";
         Json::Value videosArr(Json::arrayValue);
 
         for (auto s : m_data->streams) {
@@ -373,6 +378,7 @@ void MainWindow::finalize_session() {
     // Write tags.json
     if (!m_data->session_event_tags.empty() || !m_data->session_stages.empty() || m_data->recording_start_cpu_ts > 0) {
         Json::Value tagsRoot;
+        tagsRoot["type"] = "dc::session_tags@1.0.0";
         Json::Value stagesArr(Json::arrayValue);
         Json::Value tagsObj(Json::objectValue);
 
