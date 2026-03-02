@@ -18,6 +18,17 @@ To list the videos in a session without processing:
 
     ros2 run data_collection extract -d 20260117_153206 -l
 
+Stereo Video Splitting
+~~~~~~~~~~~~~~~~~~~~~~
+
+For videos recorded with ``side_by_side`` set to ``"LR"`` or ``"RL"`` in the configuration (see :doc:`record`), use the ``-S`` option to split the video into separate left and right channels:
+
+.. code-block:: bash
+
+    ros2 run data_collection extract -d 20260117_153206 -S
+
+This will create separate ``_left`` and ``_right`` output files (either MP4 videos or image sequences depending on the ``-f`` format option).
+
 If a tag file is present provided on the command line, the extracted frames will be organized into subdirectories based on the tags. For example, if a stage tag "approach" is active from 10:00 to 10:30, all frames captured during that time will be saved in a subdirectory named "approach".
 
 Encord Integration

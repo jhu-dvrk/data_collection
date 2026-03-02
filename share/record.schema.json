@@ -77,6 +77,11 @@
             "description": "If true, adds a separate glimagesink window with free aspect ratio right after the source, before timestamp overlays and recording.",
             "default": false
           },
+          "side_by_side": {
+            "type": "string",
+            "enum": ["LR", "RL"],
+            "description": "Indicates the video contains a side-by-side stereo pair. 'LR' means left eye is on the left half, 'RL' means right eye is on the left half. This value is stored in the sidecar JSON and used by extract -S to split the video into separate left/right channels."
+          },
           "encoding": {
             "type": "object",
             "description": "H.264 encoding parameters for the recorded MP4 file",

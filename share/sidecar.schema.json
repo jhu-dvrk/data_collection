@@ -38,6 +38,11 @@
     },
     "recording_start_cpu_ts": {
       "type": "integer"
+    },
+    "side_by_side": {
+      "type": "string",
+      "enum": ["undefined", "LR", "RL"],
+      "description": "Indicates if the video contains a side-by-side stereo pair. 'LR' means left eye is on the left, 'RL' means right eye is on the left. 'undefined' means the video is not stereo or the layout is unknown."
     }
   },
   "required": [

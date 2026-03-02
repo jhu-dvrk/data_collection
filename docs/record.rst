@@ -45,6 +45,29 @@ Define your video sources in a JSON file. The configuration format is defined in
       ]
     }
 
+Stereo Video Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For side-by-side stereo video sources (e.g., two cameras composited horizontally), use the ``side_by_side`` field to indicate the layout:
+
+.. code-block:: json
+
+    {
+      "videos": [
+        {
+          "name": "stereo_camera",
+          "stream": "... compositor pipeline combining left and right sources ...",
+          "side_by_side": "LR",
+          "record": true
+        }
+      ]
+    }
+
+- ``"LR"``: Left eye on the left half, right eye on the right half.
+- ``"RL"``: Right eye on the left half, left eye on the right half.
+
+This metadata is stored in the sidecar JSON and enables :doc:`extract` to split the video into separate left/right channels using the ``-S`` option.
+
 Configuration File Composition
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
