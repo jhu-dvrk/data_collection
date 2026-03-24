@@ -49,6 +49,13 @@ def flatten_dict(d, parent_key='', sep='.'):
         items.append((parent_key, d))
     return dict(items)
 
+def natural_sort_key(s):
+    """
+    Key function for natural sorting (e.g., 'frame10' comes after 'frame2').
+    """
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-123456789]+)', str(s))]
+
 def extract_video_chunk(args_tuple):
     video_path, output_dir, timestamps, start_frame_idx, output_format, video_basename, is_ns, is_ms, side_by_side = args_tuple
 
@@ -490,11 +497,30 @@ def main():
             ts_e, f_e = parse_stage_timestamp(stage.get("end"))
             
             def resolve_acq(ts, f):
+                # Handle types
+                if f is not None:
+                    try: f = int(f)
+                    except: f = None
+                
                 if f is not None and source_v_ts:
                     if 0 <= f < len(source_v_ts):
-                        return source_v_ts[f] - int(source_v_latency * 1e9)
+                        final_val = source_v_ts[f]
+                        # If the value is in seconds (float), convert to ns
+                        if isinstance(final_val, float):
+                             final_val = int(final_val * 1e9)
+                        return final_val - int(source_v_latency * 1e9)
+                
                 if ts:
-                    return ts - int(source_v_latency * 1e9)
+                    try: ts_val = float(ts)
+                    except: return None
+                    
+                    # Assume ts is in seconds if it's a float or reasonably small integer
+                    # 1e12 is approx year 2001 in seconds and early 1970 in ns
+                    if ts_val < 1e12:
+                        return int(ts_val * 1e9) - int(source_v_latency * 1e9)
+                    else:
+                        return int(ts_val) - int(source_v_latency * 1e9)
+                    
                 return None
 
             start_val = resolve_acq(ts_s, f_s)
