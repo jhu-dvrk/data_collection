@@ -2,12 +2,12 @@
   "type": "dc::config@1.0.0",
   "data_directory": "data",
   "configuration_files": [
-    "../decklink_stereo_1920_540.json",
-    "console.json",
-    "MTML1.json",
-    "MTMR1.json",
-    "PSM1.json",
-    "PSM2.json",
-    "ECM1.json"
+    "video/decklink_stereo_1920_540.json",
+    "dVRK/console.json",
+    "dVRK/MTML1.json",
+    "dVRK/MTMR1.json",
+    "dVRK/PSM1.json",
+    "dVRK/PSM2.json",
+    "dVRK/ECM1.json"
   ]
 }

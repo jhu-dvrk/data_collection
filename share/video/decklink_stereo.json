@@ -1,6 +1,5 @@
 {
   "data_directory": "data",
-  "type": "dc::config@1.0.0",
   "videos": [
     {
       "name": "decklink_stereo",

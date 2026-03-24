@@ -4,7 +4,6 @@
     "/MTMR/measured_cp",
     "/MTMR/measured_cv",
     "/MTMR/setpoint_cp",
-    "/MTMR/setpoint_cv",
     "/MTMR/gripper/measured_js",
     "/MTMR/gripper/setpoint_js",
     "/MTMR/local/measured_cp",

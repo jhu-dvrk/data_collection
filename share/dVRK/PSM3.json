@@ -4,7 +4,6 @@
     "/PSM3/measured_cp",
     "/PSM3/measured_cv",
     "/PSM3/setpoint_cp",
-    "/PSM3/setpoint_cv",
     "/PSM3/jaw/measured_js",
     "/PSM3/jaw/setpoint_js",
     "/PSM3/local/measured_cp",

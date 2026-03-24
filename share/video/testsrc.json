@@ -1,6 +1,5 @@
 {
   "type": "dc::config@1.0.0",
-  "data_directory": "data",
   "videos": [
     {
       "name": "bars",
