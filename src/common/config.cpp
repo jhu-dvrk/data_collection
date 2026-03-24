@@ -5,6 +5,8 @@
 #include <climits>
 #include <cstdlib>
 #include <map>
+#include <unistd.h>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 
 namespace dc {
 
@@ -126,6 +128,7 @@ bool Config::load_recursive(const std::string& path,
     if (!load_from_file(abs_path, root)) {
         return false;
     }
+    std::cout << "Loaded " << abs_path << std::endl;
 
     if (!check_type(root, "dc_config_v1", abs_path)) {
         return false;
@@ -139,13 +142,42 @@ bool Config::load_recursive(const std::string& path,
     if (slash != std::string::npos) config_dir = config_dir.substr(0, slash);
     else config_dir = ".";
 
+    // Determine share directory using ROS2 API
+    std::string share_dir = "";
+    try {
+        share_dir = ament_index_cpp::get_package_share_directory("data_collection");
+    } catch (const std::exception& e) {
+        // Fallback or ignore if not in a ROS workspace
+    }
+
     // Recursively load referenced configuration files
     for (const auto& ref : cfg.configuration_files) {
-        // Try relative to this config's directory first, then master_dir
+        // Try relative to this config's directory first, then share_dir, then master_dir
         std::string candidate = config_dir + "/" + ref;
         std::ifstream test(candidate);
         if (!test.good()) {
-            candidate = master_dir + "/" + ref;
+            if (!share_dir.empty()) {
+                candidate = share_dir + "/" + ref;
+                std::ifstream test_share(candidate);
+                if (!test_share.good()) {
+                    candidate = master_dir + "/" + ref;
+                    std::ifstream test_master(candidate);
+                    if (!test_master.good()) {
+                        std::cerr << "Failed to find configuration file: " << ref << std::endl;
+                        std::cerr << "  tried relative to config: " << config_dir + "/" + ref << std::endl;
+                        std::cerr << "  tried in share: " << share_dir + "/" + ref << std::endl;
+                        std::cerr << "  tried relative to master: " << master_dir + "/" + ref << std::endl;
+                    }
+                }
+            } else {
+                candidate = master_dir + "/" + ref;
+                std::ifstream test_master(candidate);
+                if (!test_master.good()) {
+                    std::cerr << "Failed to find configuration file: " << ref << std::endl;
+                    std::cerr << "  tried relative to config: " << config_dir + "/" + ref << std::endl;
+                    std::cerr << "  tried relative to master: " << master_dir + "/" + ref << std::endl;
+                }
+            }
         }
         if (!load_recursive(candidate, master_dir, visited, out)) {
             return false;

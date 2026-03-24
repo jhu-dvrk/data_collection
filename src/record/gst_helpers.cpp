@@ -188,7 +188,6 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
         }
         long long pts = (long long)GST_BUFFER_PTS(buf);
         if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
-        long long duration = (long long)GST_BUFFER_DURATION(buf);
         if (as->last_raw_pts != -1) {
             long long delta = pts - as->last_raw_pts;
             if (delta > 500 * 1000000LL) {
@@ -220,7 +219,6 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
         }
         long long pts = (long long)GST_BUFFER_PTS(buf);
         if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
-        long long duration = (long long)GST_BUFFER_DURATION(buf);
 
         // Debug: Log the jump if it is significant
         if (s->last_raw_pts != -1) {

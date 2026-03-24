@@ -1,13 +1,13 @@
 {
   "type": "dc::config@1.0.0",
   "data_directory": "data",
-  "configuration_files": [
+    "configuration_files": [
     "video/decklink_stereo_1920_540.json",
-    "dVRK/console.json",
-    "dVRK/MTML1.json",
-    "dVRK/MTMR1.json",
-    "dVRK/PSM1.json",
-    "dVRK/PSM2.json",
-    "dVRK/ECM1.json"
+    "isi_api_IS3000/console.json",
+    "isi_api_IS3000/MTML1.json",
+    "isi_api_IS3000/MTMR1.json",
+    "isi_api_IS3000/PSM1.json",
+    "isi_api_IS3000/PSM2.json",
+    "isi_api_IS3000/ECM1.json"
   ]
 }

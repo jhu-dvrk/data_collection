@@ -1,0 +1,14 @@
+{
+  "type": "dc::config@1.0.0",
+  "data_directory": "data",
+    "configuration_files": [
+    "video/decklink_stereo_gooviz_1920_540.json",
+    "dVRK/console.json",
+    "dVRK/MTML.json",
+    "dVRK/MTMR.json",
+    "dVRK/PSM1.json",
+    "dVRK/PSM2.json",
+    "dVRK/PSM3.json",
+    "dVRK/ECM.json"
+  ]
+}

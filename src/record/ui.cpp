@@ -141,7 +141,7 @@ MainWindow::MainWindow(AppData* data)
         Gtk::Box* stats_box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_HORIZONTAL, WIDGET_SPACING_PX));
         m_bag_vbox.pack_start(*stats_box, Gtk::PACK_SHRINK);
 
-        m_bag_stats_label.set_text("Topics: 0/0\nMessages: 0");
+        m_bag_stats_label.set_markup("Topics: 0/0\nMessages: 0");
         m_bag_stats_label.set_alignment(0.0, 0.5);
         stats_box->pack_start(m_bag_stats_label, Gtk::PACK_EXPAND_WIDGET);
 
@@ -723,11 +723,16 @@ bool MainWindow::on_ui_update() {
         gtk_label_set_text(GTK_LABEL(s->stats_label), buf);
     }
 
-    char bag_buf[256];
+    char bag_buf[512];
     std::lock_guard<std::mutex> lock(m_data->data_mutex);
-    snprintf(bag_buf, sizeof(bag_buf), "Topics: %d/%lu\nMessages: %lld",
-             m_data->bag_topics_found, m_data->ros_topics.size(), m_data->bag_messages_recorded);
-    m_bag_stats_label.set_text(bag_buf);
+    if ((size_t)m_data->bag_topics_found < m_data->ros_topics.size()) {
+        snprintf(bag_buf, sizeof(bag_buf), "<span foreground='red'>Topics: %d/%lu</span>\nMessages: %lld",
+                 m_data->bag_topics_found, m_data->ros_topics.size(), m_data->bag_messages_recorded);
+    } else {
+        snprintf(bag_buf, sizeof(bag_buf), "Topics: %d/%lu\nMessages: %lld",
+                 m_data->bag_topics_found, m_data->ros_topics.size(), m_data->bag_messages_recorded);
+    }
+    m_bag_stats_label.set_markup(bag_buf);
 
     return true;
 }

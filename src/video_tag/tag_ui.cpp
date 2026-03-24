@@ -228,8 +228,6 @@ void TagWindow::load_sidecar_json() {
         m_data.frame_cpu_timestamps.clear();
         m_data.frame_gst_timestamps.clear();
 
-        long long first_gst_ts = -1;
-
         for (const auto& frame : root["frames"]) {
             if (frame.isMember("cpu_ts")) {
                 m_data.frame_cpu_timestamps.push_back(frame["cpu_ts"].asInt64());

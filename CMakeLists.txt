@@ -19,6 +19,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-video-1.0 gstreamer-app-1.0)
@@ -36,9 +37,10 @@ target_include_directories(data_collection_lib PUBLIC
   $<INSTALL_INTERFACE:include>
   ${JSONCPP_INCLUDE_DIRS}
 )
-target_link_libraries(data_collection_lib
-  ${JSONCPP_LIBRARIES}
+ament_target_dependencies(data_collection_lib
+  ament_index_cpp
 )
+
 # Alias for easier usage if needed, though target name is fine
 set_target_properties(data_collection_lib PROPERTIES OUTPUT_NAME "data_collection")
 
