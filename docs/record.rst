@@ -1,7 +1,7 @@
 Record
 ======
 
-The recording application is the core component of this project. It handles synchronized multi-stream video and audio capture, as well as ROS2 topic recording.
+The recording application is the core component of this project. It captures multi-stream video and audio while preserving each source's native timestamps, and it also records ROS2 topics.
 
 Examples and configuration files
 --------------------------------
@@ -119,7 +119,7 @@ If the ``stages`` field is provided in the configuration, a "Stages" list will a
 - **Looping:** When the last stage is completed, it wraps back to the first stage.
 - **Manual Override:** Users can click any stage in the list to select it for the next recording (selection is disabled while recording is in progress).
 - **Hardware-Accelerated Encoding:** Automatically detects and uses available hardware encoders (NVENC, VAAPI) to minimize CPU usage.
-- **Nanosecond Precision:** All video frames are timestamped in nanoseconds since epoch, ensuring perfect alignment with ROS2 bags. These timestamps are stored in sidecar JSON files and used by :doc:`extract` for frame-accurate processing.
+- **Nanosecond Precision:** All video frames are timestamped in nanoseconds since epoch. These timestamps are stored in sidecar JSON files and used by :doc:`extract` together with per-source ``estimated_latency`` to align data as closely as possible.
 - **Session Metadata:** An ``index.json`` file is created in each session directory, storing video/bag durations and metadata. This metadata is also consumed by :doc:`video_tag`.
 
 ROS integration

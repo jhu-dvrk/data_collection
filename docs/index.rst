@@ -1,7 +1,7 @@
 Introduction
 ============
 
-A multi-stream video record application using C++, GStreamer, and GTKmm. It allows creating flexible video streams via JSON configuration, provides live previews, and supports synchronized recording with timestamps. ROS topics can also be recorded along the videos. Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
+A multi-stream video record application using C++, GStreamer, and GTKmm. It allows creating flexible video streams via JSON configuration, provides live previews, and preserves per-source timestamps during recording. ROS topics can also be recorded alongside videos. During extraction, per-source ``estimated_latency`` values are used to align data as closely as possible. Note that the videos are recorded directly from the source using GStreamer and don't rely on ROS topics.
 
 .. image:: _static/live_preview.png
    :alt: Multi-stream Video Data Record Preview
@@ -22,7 +22,7 @@ Data Flow Overview
 2. **Recording**: The :doc:`record` application uses the configuration to capture video, audio, and ROS topics.
 3. **Curation**: The :doc:`video_tag` tool loads the session to add temporal labels and frame-accurate tags.
 4. **Extraction**: The :doc:`extract` tool processes the recorded videos and ROS bags to generate training-ready data (images and CSVs).
-5. **Validation**: The :doc:`latency` tools verify syncing and measuring system performance.
+5. **Validation**: The :doc:`latency` tools verify timing consistency and measure system performance.
 
 Shared Configuration Files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -47,7 +47,7 @@ The session directory and its contents are consumed by:
 
 - :doc:`video_tag <video_tag>`: Loads the video files and uses ``index.json`` to identify available streams. It generates or updates a ``tags.json`` file in the session directory.
 - :doc:`extract <extract>`: Uses the sidecar timestamps to extract frames from ``.mp4`` at the exact original nanoseconds and converts ROS bags into easy-to-use CSVs.
-- :doc:`check_timestamps <latency>`: Uses extracted frames to verify synchronization against burned-in overlays.
+- :doc:`check_timestamps <latency>`: Uses extracted frames to verify timestamp consistency and quantify timing offsets against burned-in overlays.
 
 .. toctree::
    :maxdepth: 2

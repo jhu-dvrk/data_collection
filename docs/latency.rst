@@ -1,7 +1,7 @@
 Tools for Latency
 =================
 
-This section covers tools used to measure and verify synchronization and latency.
+This section covers tools used to measure and verify timing alignment and latency.
 
 Video Latency
 -------------
@@ -19,7 +19,7 @@ To run the latency estimation:
 
     ros2 run data_collection video_latency -c config.json
 
-Once the estimated latency is identified and saved in the configuration file, it can be used to adjust timestamps during recording and extraction for better synchronization with ROS topics and other data sources.
+Once the estimated latency is identified and saved in the configuration file, it can be used during extraction to adjust timestamps and improve alignment with ROS topics and other data sources.
 
 Checking Embedded Timestamps
 ----------------------------
@@ -27,7 +27,7 @@ Checking Embedded Timestamps
 .. note::
    The embedded timestamp verification is currently **experimental** and operates on frames extracted by :doc:`extract`.
 
-The ``check_timestamps.py`` script (located in the ``tests/`` directory) verifies the synchronization between the recording's filenames (based on system time) and the burned-in GStreamer timestamps. It uses Tesseract OCR to read the "Timestamp overlay" strip.
+The ``check_timestamps.py`` script (located in the ``tests/`` directory) verifies timestamp consistency between recording filenames (based on system time) and burned-in GStreamer timestamps. It uses Tesseract OCR to read the "Timestamp overlay" strip.
 
 To verify timestamps in extracted frames:
 

@@ -4,7 +4,7 @@ Video Tag
 The ``video_tag`` C++ application is designed for post-recording data curation. It allows users to review recorded videos produced by :doc:`record` with frame-accurate precision and assign temporal labels (stages) or discrete frame tags.
 
 .. note::
-   When tagging a session with multiple video streams, users should select and use a **primary video** to perform the tagging. This primary video acts as the reference for temporal synchronization across all other streams.
+    When tagging a session with multiple video streams, users should select and use a **primary video** to perform the tagging. This primary video acts as the reference for temporal alignment across all other streams.
 
 Usage
 -----

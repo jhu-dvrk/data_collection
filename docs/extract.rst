@@ -5,6 +5,7 @@ The ``extract.py`` script identifies all data in a session directory generated b
 
 1. Extracts individual frames from all recorded ``.mp4`` files using the sidecar ``.json`` nanosecond timestamps created during recording.
 2. Converts all recorded ROS bag topics into individual ``.csv`` files based on their original nanosecond timestamps.
+3. Uses per-source ``estimated_latency`` values (when present) to align extracted ranges across data sources as closely as possible.
 
 To process a recorded session directory:
 
