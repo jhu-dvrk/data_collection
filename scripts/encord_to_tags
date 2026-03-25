@@ -11,7 +11,7 @@ except ImportError:
         if dt is None: dt = datetime.now()
         return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
 
-def convert_encord_to_tags(encord_path, sidecar_path, output_path):
+def convert_encord_to_tags(encord_path, sidecar_path, output_path=None):
     print(f"Loading Encord file: {encord_path}")
     with open(encord_path, 'r') as f:
         encord_raw = json.load(f)
@@ -22,14 +22,39 @@ def convert_encord_to_tags(encord_path, sidecar_path, output_path):
             print("Error: Encord file is an empty list.")
             return
         encord_data = encord_raw[0]
+    elif isinstance(encord_raw, dict) and 'classification_answers' not in encord_raw and len(encord_raw) == 1:
+        # User might have exported a single video's labels which is wrapped in a dict with video hash as key
+        key = list(encord_raw.keys())[0]
+        encord_data = encord_raw[key]
+        print(f"Extracted data from key: {key}")
     else:
         encord_data = encord_raw
+
+    # Infer output path if not provided
+    if not output_path:
+        data_title = encord_data.get('data_title')
+        sidecar_dir = os.path.dirname(os.path.abspath(sidecar_path))
+        if data_title:
+            # data_title is often the video filename, e.g., "decklink_stereo_260120_111551.mp4"
+            # We want to change the extension to _tags.json
+            base_name = os.path.splitext(data_title)[0]
+            output_path = os.path.join(sidecar_dir, f"{base_name}_tags.json")
+        else:
+            sidecar_filename = os.path.basename(sidecar_path)
+            video_name = os.path.splitext(sidecar_filename)[0]
+            output_path = os.path.join(sidecar_dir, f"{video_name}_tags.json")
 
     print(f"Loading Sidecar file: {sidecar_path}")
     with open(sidecar_path, 'r') as f:
         sidecar_data = json.load(f)
     
-    frames = sidecar_data.get('frames', [])
+    # Check if this is a camera sidecar (with timestamps_ns) or a generic one (with frames)
+    if 'timestamps_ns' in sidecar_data:
+        timestamps_ns = sidecar_data['timestamps_ns']
+        frames = [{"cpu_ts": ts / 1e9} for ts in timestamps_ns]
+    else:
+        frames = sidecar_data.get('frames', [])
+
     num_frames = len(frames)
     
     stages = []
@@ -92,6 +117,8 @@ def convert_encord_to_tags(encord_path, sidecar_path, output_path):
     stages.sort(key=lambda x: x['start']['cpu_ts'])
     
     output_data = {
+        "type": "dc::video_tags@1.0.0",
+        "video_file": os.path.basename(sidecar_path).replace('.json', '.mp4'),
         "generated_at": get_current_timestamp_iso8601(),
         "stages": stages,
         "tags": {}
@@ -107,16 +134,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Convert Encord JSON export to project tag format.')
     parser.add_argument('--encord', '-e', required=True, help='Path to Encord JSON file')
     parser.add_argument('--sidecar', '-s', required=True, help='Path to video sidecar JSON file')
-    parser.add_argument('--output', '-o', help='Path to output tag file (default: tags.json in sidecar directory)')
+    parser.add_argument('--output', '-o', help='Path to output tag file (default: inferred from data_title or sidecar name)')
     
     args = parser.parse_args()
     
-    output_path = args.output
-    if not output_path:
-        sidecar_abs = os.path.abspath(args.sidecar)
-        sidecar_dir = os.path.dirname(sidecar_abs)
-        sidecar_filename = os.path.basename(sidecar_abs)
-        video_name = os.path.splitext(sidecar_filename)[0]
-        output_path = os.path.join(sidecar_dir, f"{video_name}_tags.json")
-    
-    convert_encord_to_tags(args.encord, args.sidecar, output_path)
+    convert_encord_to_tags(args.encord, args.sidecar, args.output)
