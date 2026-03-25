@@ -546,5 +546,7 @@ def main():
             if os.path.exists(bag_path):
                 rosbag_to_csv(bag_path, target_dir, target["start"], target["end"])
 
+    print(f"Extraction complete. Files extracted to: {base_extracted_dir}")
+
 if __name__ == "__main__":
     main()

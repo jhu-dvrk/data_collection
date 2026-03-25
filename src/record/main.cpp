@@ -107,8 +107,6 @@ int main(int argc, char *argv[]) {
         data.trigger_topic, 10,
         [&](const std_msgs::msg::Bool::SharedPtr msg) { ros_record_callback(msg, &data); }
     );
-    std::cout << "Subscribed to trigger topic: " << data.trigger_topic << std::endl;
-    std::cout << "Publishing recording state on: record/recording" << std::endl;
 
     // Spin ROS in a separate thread
     auto executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
@@ -251,6 +249,8 @@ int main(int argc, char *argv[]) {
         } else {
             std::cerr << "Warning: could not remove session directory: " << ec.message() << std::endl;
         }
+    } else if (!data.session_dir.empty()) {
+        std::cout << "Session finalized: " << data.session_dir << std::endl;
     }
 
     return 0;

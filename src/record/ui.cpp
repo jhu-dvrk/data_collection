@@ -444,8 +444,6 @@ void MainWindow::finalize_session() {
         Json::StreamWriterBuilder b;
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(tagsRoot, &os);
     }
-
-    std::cout << "Session finalized." << std::endl;
 }
 
 MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream* s) {
