@@ -30,6 +30,103 @@ For videos recorded with ``side_by_side`` set to ``"LR"`` or ``"RL"`` in the con
 
 This will create separate ``_left`` and ``_right`` output files (either MP4 videos or image sequences depending on the ``-f`` format option).
 
+LeRobot Parquet Export (Phase 1)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The extractor can also export ROS bag data to a LeRobot-compatible v3-style parquet dataset (low-dimensional data only; no video export in this phase).
+
+Conceptual mapping
+^^^^^^^^^^^^^^^^^^
+
+LeRobot has two primary concepts that map to the recording workflow as follows:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 30 40
+
+   * - Recording concept
+     - LeRobot concept
+     - Example
+   * - Stage instance
+     - ``episode``
+     - ``grasp_001``, ``grasp_002``
+   * - Stage type
+     - ``task``
+     - ``grasp``
+   * - Session
+     - *(no equivalent)*
+     - stored as metadata only
+
+Each tagged stage instance (or ``full_session`` when using ``-a``) becomes one LeRobot **episode**.
+The **task** label for that episode is derived from the stage type — either looked up via ``task_by_stage`` in the config, or taken from ``default_task`` as a fallback.
+
+Usage
+^^^^^
+
+You can use either:
+
+- ``-F lerobot`` (``--data-format lerobot``): enable LeRobot export. If no ``--lerobot-config`` is provided, feature mapping is auto-inferred from ROS bag topics.
+- ``-F lerobot --lerobot-config``: provide explicit topic/field mappings.
+
+Auto mode example (no config file required):
+
+.. code-block:: bash
+
+        ros2 run data_collection extract -d 20260117_153206 -a \
+            -F lerobot
+
+Config-based example:
+
+.. code-block:: bash
+
+        ros2 run data_collection extract -d 20260117_153206 -a \
+            -F lerobot --lerobot-config lerobot_export.json
+
+LeRobot output is written to:
+
+- ``<session>/extracted/lerobot``
+
+Each stage instance (for example ``full_session`` or each tagged segment) is exported as one LeRobot episode.
+
+Example ``lerobot_export.json``:
+
+.. code-block:: json
+
+        {
+            "fps": 30,
+            "reference_topic": "/PSM1/measured_js",
+            "default_task": "open_h_teleop",
+            "task_by_stage": {
+                "grasp_001": "grasp",
+                "grasp_002": "grasp",
+                "release_001": "release"
+            },
+            "topic_latency_ns": {
+                "/PSM1/setpoint_js": 0,
+                "/PSM1/measured_js": 0
+            },
+            "features": [
+                {
+                    "name": "observation.state",
+                    "topic": "/PSM1/measured_js",
+                    "fields": ["position.0", "position.1", "position.2", "position.3", "position.4", "position.5", "position.6"],
+                    "dtype": "float32",
+                    "shape": [7]
+                },
+                {
+                    "name": "action",
+                    "topic": "/PSM1/setpoint_js",
+                    "fields": ["position.0", "position.1", "position.2", "position.3", "position.4", "position.5", "position.6"],
+                    "dtype": "float32",
+                    "shape": [7]
+                }
+            ]
+        }
+
+    A template is also provided in the package at:
+
+    - ``share/lerobot_export_template.json``
+
 If a tag file is present provided on the command line, the extracted frames will be organized into subdirectories based on the tags. For example, if a stage tag "approach" is active from 10:00 to 10:30, all frames captured during that time will be saved in a subdirectory named "approach".
 
 Encord Integration

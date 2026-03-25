@@ -27,6 +27,8 @@
   <build_depend>libjsoncpp-dev</build_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pandas</exec_depend>
+  <exec_depend>python3-pyarrow</exec_depend>
   <exec_depend>gstreamer-1.0</exec_depend>
   <exec_depend>gstreamer-video-1.0</exec_depend>
   <exec_depend>gstreamer-app-1.0</exec_depend>

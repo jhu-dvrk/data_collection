@@ -15,6 +15,7 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 from rosidl_runtime_py.convert import message_to_ordereddict
 from .common import get_current_timestamp_iso8601
+from .lerobot_export import load_lerobot_config, infer_lerobot_config_from_bag, LeRobotPhase1Writer, export_rosbag_episode
 
 
 def parse_stage_timestamp(value):
@@ -419,16 +420,19 @@ def main():
     parser.add_argument("-d", "--directory", help="Session directory", required=True)
     parser.add_argument("-t", "--tags", help="Tags JSON file")
     parser.add_argument("-a", "--all", action="store_true", help="Extract all data")
-    parser.add_argument("-f", "--format", choices=['jpg', 'png', 'mp4'], action='append', help="Output format(s).")
+    parser.add_argument("-f", "--video-format", choices=['jpg', 'png', 'mp4'], action='append', help="Output video format(s).")
+    parser.add_argument("-F", "--data-format", choices=['csv', 'lerobot'], help="ROS bag data export format (csv or lerobot).")
     parser.add_argument("-j", "--jobs", type=int)
     parser.add_argument("-S", "--split-stereo", action="store_true", help="Split stereo video streams (LR/RL) into two channels")
+    parser.add_argument("--lerobot-config", help="JSON config to export ROS bags to LeRobot Parquet format")
+    parser.add_argument("--lerobot-task", help="Set the default task label (stage type) for all exported episodes, overriding default_task in the config")
     args = parser.parse_args()
 
     if not args.tags and not args.all:
         print("Error: Either -t (tags) or -a (all) must be specified.")
         sys.exit(1)
 
-    formats = args.format if args.format else ['mp4']
+    formats = args.video_format if args.video_format else ['mp4']
     num_jobs = args.jobs or max(1, (os.cpu_count() or 1) // 2)
     
     if not os.path.exists(args.directory):
@@ -447,6 +451,31 @@ def main():
 
     base_extracted_dir = os.path.join(args.directory, "extracted")
     os.makedirs(base_extracted_dir, exist_ok=True)
+
+    lerobot_writer = None
+    lerobot_dir = os.path.join(base_extracted_dir, "lerobot")
+    if args.lerobot_config or args.data_format == 'lerobot':
+        try:
+            if not rosbag_name:
+                raise RuntimeError("LeRobot export requested but no rosbag entry found in index.json")
+
+            bag_path = os.path.join(args.directory, rosbag_name)
+            if not os.path.exists(bag_path):
+                raise RuntimeError(f"LeRobot export requested but rosbag path not found: {bag_path}")
+
+            if args.lerobot_config:
+                lerobot_config = load_lerobot_config(args.lerobot_config)
+            else:
+                lerobot_config = infer_lerobot_config_from_bag(bag_path)
+                print("LeRobot config auto-inferred from rosbag topics (use --lerobot-config to override).")
+
+            if args.lerobot_task:
+                lerobot_config["default_task"] = args.lerobot_task
+            lerobot_writer = LeRobotPhase1Writer(lerobot_dir, lerobot_config)
+            print(f"LeRobot Phase-1 export enabled. Output directory: {lerobot_dir}")
+        except Exception as e:
+            print(f"CRITICAL: failed to initialize LeRobot export: {e}")
+            sys.exit(1)
 
     extraction_targets = []
     if args.all:
@@ -544,9 +573,27 @@ def main():
         if rosbag_name:
             bag_path = os.path.join(args.directory, rosbag_name)
             if os.path.exists(bag_path):
-                rosbag_to_csv(bag_path, target_dir, target["start"], target["end"])
+                if args.data_format != 'lerobot':
+                    rosbag_to_csv(bag_path, target_dir, target["start"], target["end"])
+                if lerobot_writer:
+                    export_rosbag_episode(
+                        bag_path,
+                        lerobot_writer,
+                        episode_name=target["name"],
+                        start_ns=target["start"],
+                        end_ns=target["end"],
+                    )
+
+    if lerobot_writer:
+        if lerobot_writer.has_episodes():
+            lerobot_writer.finalize()
+            print(f"LeRobot export complete. Dataset written to: {lerobot_dir}")
+        else:
+            print("LeRobot export requested, but no episodes were generated from the selected ranges.")
 
     print(f"Extraction complete. Files extracted to: {base_extracted_dir}")
+    if lerobot_writer and lerobot_writer.has_episodes():
+        print(f"LeRobot files extracted to: {lerobot_dir}")
 
 if __name__ == "__main__":
     main()
