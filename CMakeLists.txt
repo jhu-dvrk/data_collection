@@ -152,6 +152,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/extract
   scripts/encord_to_tags
+  scripts/stereo_configurator
   DESTINATION lib/${PROJECT_NAME}
 )
 

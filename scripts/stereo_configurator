@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+
+import argparse
+from dataclasses import dataclass
+
+import cv2
+import numpy as np
+
+
+# Key code maps for OpenCV waitKeyEx across common backends/platforms.
+#
+# Why multiple values?
+# - Windows HighGUI often returns large virtual-key style codes.
+# - Linux/GTK/Qt backends may return X11-style codes (e.g. 65362 for Up).
+# - Some setups only expose the low-byte ASCII-ish values (81/82/83/84).
+#
+# We accept all known variants so arrow controls behave consistently.
+KEY_UP = {2490368, 65362, 82}
+KEY_DOWN = {2621440, 65364, 84}
+KEY_LEFT = {2424832, 65361, 81}
+KEY_RIGHT = {2555904, 65363, 83}
+
+
+def clip_int(value: int, min_value: int, max_value: int) -> int:
+    return max(min_value, min(max_value, value))
+
+
+@dataclass
+class CropValues:
+    left: int
+    right: int
+    top: int
+    bottom: int
+
+
+def compute_center_crop(src_w: int, src_h: int, dst_w: int, dst_h: int) -> CropValues:
+    crop_x_total = max(0, src_w - dst_w)
+    crop_y_total = max(0, src_h - dst_h)
+
+    left_crop = crop_x_total // 2
+    right_crop = crop_x_total - left_crop
+    top_crop = crop_y_total // 2
+    bottom_crop = crop_y_total - top_crop
+
+    return CropValues(left=left_crop, right=right_crop, top=top_crop, bottom=bottom_crop)
+
+
+def compute_eye_size(working_w: int, working_h: int, resize_percent: int):
+    eye_w = max(1, int(round(working_w * 100.0 / resize_percent)))
+    eye_h = max(1, int(round(working_h * 100.0 / resize_percent)))
+    return eye_w, eye_h
+
+
+def compute_eye_crop(working_w: int, working_h: int, eye_w: int, eye_h: int, baseline_px: int, sign: int) -> CropValues:
+    crop_x_total = max(0, working_w - eye_w)
+    crop_y_total = max(0, working_h - eye_h)
+
+    baseline_half = int(round(baseline_px / 2.0))
+    center_x = crop_x_total // 2
+    left_crop = clip_int(center_x + sign * baseline_half, 0, crop_x_total)
+    right_crop = crop_x_total - left_crop
+
+    top_crop = crop_y_total // 2
+    bottom_crop = crop_y_total - top_crop
+
+    return CropValues(left=left_crop, right=right_crop, top=top_crop, bottom=bottom_crop)
+
+
+def is_baseline_valid(working_w: int, eye_w: int, baseline_px: int) -> bool:
+    crop_x_total = max(0, working_w - eye_w)
+    center_x = crop_x_total // 2
+    baseline_half = int(round(baseline_px / 2.0))
+
+    left_a = center_x - baseline_half
+    left_b = center_x + baseline_half
+    return 0 <= left_a <= crop_x_total and 0 <= left_b <= crop_x_total
+
+
+def clamp_baseline_to_valid(working_w: int, eye_w: int, baseline_px: int) -> int:
+    if is_baseline_valid(working_w, eye_w, baseline_px):
+        return baseline_px
+
+    if baseline_px > 0:
+        candidate = baseline_px
+        while candidate > 0 and not is_baseline_valid(working_w, eye_w, candidate):
+            candidate -= 1
+        return candidate
+
+    candidate = baseline_px
+    while candidate < 0 and not is_baseline_valid(working_w, eye_w, candidate):
+        candidate += 1
+    return candidate
+
+
+def baseline_valid_range(working_w: int, eye_w: int):
+    crop_x_total = max(0, working_w - eye_w)
+    center_x = crop_x_total // 2
+
+    min_half = -center_x
+    max_half = crop_x_total - center_x
+
+    min_baseline = int(np.ceil(2.0 * min_half))
+    max_baseline = int(np.floor(2.0 * max_half))
+    return min_baseline, max_baseline
+
+
+def crop_frame(frame: np.ndarray, crop: CropValues) -> np.ndarray:
+    height, width = frame.shape[:2]
+    x0 = crop.left
+    x1 = width - crop.right
+    y0 = crop.top
+    y1 = height - crop.bottom
+    return frame[y0:y1, x0:x1]
+
+
+def as_preview_pipeline(source_snippet: str) -> str:
+    snippet = source_snippet.strip()
+    if "appsink" in snippet:
+        return snippet
+    return f"{snippet} ! videoconvert ! appsink drop=true sync=false"
+
+
+def open_capture(source_label: str, source_snippet: str):
+    pipeline = as_preview_pipeline(source_snippet)
+    cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+    if not cap.isOpened():
+        raise RuntimeError(
+            f"Unable to open {source_label} source with GStreamer backend. "
+            f"Source must be a valid GStreamer snippet."
+        )
+    return cap
+
+
+def build_stream_string(
+    first_source: str,
+    second_source: str,
+    first_src_w: int,
+    first_src_h: int,
+    second_src_w: int,
+    second_src_h: int,
+    working_w: int,
+    working_h: int,
+    resize_percent: int,
+    baseline_px: int,
+) -> str:
+    eye_w, eye_h = compute_eye_size(working_w, working_h, resize_percent)
+
+    first_normalize = compute_center_crop(first_src_w, first_src_h, working_w, working_h)
+    second_normalize = compute_center_crop(second_src_w, second_src_h, working_w, working_h)
+
+    left_zoom_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, sign=-1)
+    right_zoom_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, sign=1)
+
+    first_crop = CropValues(
+        left=first_normalize.left + left_zoom_crop.left,
+        right=first_normalize.right + left_zoom_crop.right,
+        top=first_normalize.top + left_zoom_crop.top,
+        bottom=first_normalize.bottom + left_zoom_crop.bottom,
+    )
+    second_crop = CropValues(
+        left=second_normalize.left + right_zoom_crop.left,
+        right=second_normalize.right + right_zoom_crop.right,
+        top=second_normalize.top + right_zoom_crop.top,
+        bottom=second_normalize.bottom + right_zoom_crop.bottom,
+    )
+
+    src_a = first_source
+    src_b = second_source
+    crop_a = first_crop
+    crop_b = second_crop
+
+    chain_a = (
+        f"{src_a} ! queue ! videoconvert ! "
+        f"videocrop left={crop_a.left} right={crop_a.right} top={crop_a.top} bottom={crop_a.bottom} ! mix.sink_0"
+    )
+
+    chain_b = (
+        f"{src_b} ! queue ! videoconvert ! "
+        f"videocrop left={crop_b.left} right={crop_b.right} top={crop_b.top} bottom={crop_b.bottom} ! mix.sink_1"
+    )
+
+    return (
+        f"{chain_a} {chain_b} "
+        f"compositor name=mix sink_0::xpos=0 sink_1::xpos={eye_w} ! "
+        f"video/x-raw,width={2 * eye_w},height={eye_h}"
+    )
+
+
+def print_pipeline(stream: str, side_by_side: str, resize_percent: int, baseline_px: int):
+    print("\n--- stereo_configurator ---")
+    print(f"side_by_side: {side_by_side}")
+    print(f"resize_percent: {resize_percent}")
+    print(f"baseline_px: {baseline_px}")
+    print("stream:")
+    print(stream)
+
+
+def key_matches(code: int, expected: set[int]) -> bool:
+    if code in expected:
+        return True
+    # Some builds encode arrow keys with useful info in the low byte only.
+    return (code & 0xFF) in expected
+
+
+def set_fullscreen(window_name: str, enabled: bool):
+    mode = cv2.WINDOW_FULLSCREEN if enabled else cv2.WINDOW_NORMAL
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, mode)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Keyboard-only side-by-side stereo configurator for data_collection record. "
+            "Uses OpenCV preview and prints a stream string for copy/paste into JSON config."
+        )
+    )
+    parser.add_argument("-f", "--first", required=True, help="First source GStreamer snippet")
+    parser.add_argument("-s", "--second", required=True, help="Second source GStreamer snippet")
+    args = parser.parse_args()
+
+    first_gst = args.first.strip()
+    second_gst = args.second.strip()
+    if not first_gst or not second_gst:
+        raise RuntimeError("Both --first and --second must be non-empty GStreamer snippets")
+
+    first_cap = open_capture("first", first_gst)
+    second_cap = open_capture("second", second_gst)
+
+    ok_first, first_frame = first_cap.read()
+    ok_second, second_frame = second_cap.read()
+    if not ok_first or first_frame is None or not ok_second or second_frame is None:
+        raise RuntimeError("Unable to read first frame from one or both sources")
+
+    first_src_h, first_src_w = first_frame.shape[:2]
+    second_src_h, second_src_w = second_frame.shape[:2]
+    working_h = min(first_src_h, second_src_h)
+    working_w = min(first_src_w, second_src_w)
+
+    preview_swapped = False
+    preview_fullscreen = False
+    resize_percent = 100
+    baseline_px = 0
+    window_name = "stereo_preview"
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, max(960, 2 * working_w), max(360, working_h))
+
+    stream_string = build_stream_string(
+        first_gst,
+        second_gst,
+        first_src_w,
+        first_src_h,
+        second_src_w,
+        second_src_h,
+        working_w,
+        working_h,
+        resize_percent,
+        baseline_px,
+    )
+    side_by_side = "LR"
+    print_pipeline(stream_string, side_by_side, resize_percent, baseline_px)
+
+    while True:
+        ok_first, first_frame = first_cap.read()
+        ok_second, second_frame = second_cap.read()
+
+        if not ok_first or first_frame is None:
+            first_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok_first, first_frame = first_cap.read()
+        if not ok_second or second_frame is None:
+            second_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok_second, second_frame = second_cap.read()
+        if not ok_first or not ok_second or first_frame is None or second_frame is None:
+            continue
+
+        first_tile = crop_frame(first_frame, compute_center_crop(first_frame.shape[1], first_frame.shape[0], working_w, working_h))
+        second_tile = crop_frame(second_frame, compute_center_crop(second_frame.shape[1], second_frame.shape[0], working_w, working_h))
+
+        if preview_swapped:
+            first_tile, second_tile = second_tile, first_tile
+
+        eye_w, eye_h = compute_eye_size(working_w, working_h, resize_percent)
+        baseline_px = clamp_baseline_to_valid(working_w, eye_w, baseline_px)
+        baseline_min, baseline_max = baseline_valid_range(working_w, eye_w)
+        left_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, sign=-1)
+        right_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, sign=1)
+
+        first_out = crop_frame(first_tile, left_crop)
+        second_out = crop_frame(second_tile, right_crop)
+        preview = np.hstack([first_out, second_out])
+
+        preview_mode = "swapped" if preview_swapped else "normal"
+        fullscreen_mode = "on" if preview_fullscreen else "off"
+        info = f"{side_by_side} | resize:{resize_percent}% | baseline:{baseline_px}px | preview:{preview_mode} | fullscreen:{fullscreen_mode}"
+        baseline_info = f"valid baseline range: [{baseline_min}, {baseline_max}] px"
+        controls = "arrows: resize/baseline  t:preview-swap  f:fullscreen stretch  q/esc:quit"
+        cv2.putText(preview, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(preview, baseline_info, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(preview, controls, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+        display_frame = preview
+        if preview_fullscreen:
+            try:
+                _, _, win_w, win_h = cv2.getWindowImageRect(window_name)
+                if win_w > 0 and win_h > 0:
+                    display_frame = cv2.resize(preview, (win_w, win_h), interpolation=cv2.INTER_LINEAR)
+            except cv2.error:
+                pass
+
+        cv2.imshow(window_name, display_frame)
+
+        key = cv2.waitKeyEx(1)
+        changed = False
+
+        if key in (27, ord("q")):
+            break
+        if key in (ord("t"), ord("T")):
+            preview_swapped = not preview_swapped
+        elif key in (ord("f"), ord("F")):
+            preview_fullscreen = not preview_fullscreen
+            set_fullscreen(window_name, preview_fullscreen)
+        # Arrow keys:
+        #   Up/Down   -> resize crop rectangle
+        #   Left/Right-> baseline shift
+        elif key_matches(key, KEY_UP):
+            resize_percent = clip_int(resize_percent + 1, 100, 200)
+            changed = True
+        elif key_matches(key, KEY_DOWN):
+            resize_percent = clip_int(resize_percent - 1, 100, 200)
+            changed = True
+        elif key_matches(key, KEY_LEFT):
+            candidate = clip_int(baseline_px - 1, -300, 300)
+            if is_baseline_valid(working_w, eye_w, candidate):
+                baseline_px = candidate
+                changed = True
+        elif key_matches(key, KEY_RIGHT):
+            candidate = clip_int(baseline_px + 1, -300, 300)
+            if is_baseline_valid(working_w, eye_w, candidate):
+                baseline_px = candidate
+                changed = True
+
+        if changed:
+            stream_string = build_stream_string(
+                first_gst,
+                second_gst,
+                first_src_w,
+                first_src_h,
+                second_src_w,
+                second_src_h,
+                working_w,
+                working_h,
+                resize_percent,
+                baseline_px,
+            )
+            print_pipeline(stream_string, side_by_side, resize_percent, baseline_px)
+
+    first_cap.release()
+    second_cap.release()
+    cv2.destroyAllWindows()
+
+    print("\nFinal values for config:")
+    print(f"side_by_side: {side_by_side}")
+    print("stream:")
+    print(stream_string)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

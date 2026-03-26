@@ -68,6 +68,43 @@ For side-by-side stereo video sources (e.g., two cameras composited horizontally
 
 This metadata is stored in the sidecar JSON and enables :doc:`extract` to split the video into separate left/right channels using the ``-S`` option.
 
+Stereo Pipeline Configurator
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use the ``stereo_configurator`` utility to interactively tune a side-by-side stereo stream and generate a copy/paste ``stream`` string for ``record`` JSON configs.
+
+.. code-block:: bash
+
+    ros2 run data_collection stereo_configurator \
+  -f "v4l2src device=/dev/video0 ! video/x-raw,width=1280,height=720,framerate=30/1" \
+  -s "v4l2src device=/dev/video1 ! video/x-raw,width=1280,height=720,framerate=30/1"
+
+The tool provides:
+
+- Keyboard controls only (OpenCV window), no Tk/GUI dependency.
+- Inputs must be GStreamer source snippets for both ``--first`` and ``--second``.
+- **Up/Down arrows**: resize the crop rectangle (aspect ratio preserved, no scaling stage in pipeline).
+- **Left/Right arrows**: change baseline in pixels.
+- **t**: preview-only left/right swap to help identify channels.
+- **f**: toggle fullscreen preview and stretch to fill the screen (preview only).
+
+The generated value can be pasted into the ``stream`` field, for example (``side_by_side`` remains ``LR``):
+
+.. code-block:: json
+
+    {
+      "videos": [
+        {
+          "name": "stereo_camera",
+          "stream": "<paste generated stream string>",
+          "side_by_side": "LR",
+          "record": true
+        }
+      ]
+    }
+
+The initial resize is 100% (no zoom).
+
 Configuration File Composition
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
