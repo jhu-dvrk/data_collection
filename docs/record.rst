@@ -83,8 +83,9 @@ The tool provides:
 
 - Keyboard controls only (OpenCV window), no Tk/GUI dependency.
 - Inputs must be GStreamer source snippets for both ``--first`` and ``--second``.
-- **Up/Down arrows**: resize the crop rectangle (aspect ratio preserved, no scaling stage in pipeline).
-- **Left/Right arrows**: change baseline in pixels.
+- **+/-**: resize the crop rectangle (aspect ratio preserved, no scaling stage in pipeline).
+- **Left/Right arrows**: change horizontal baseline in pixels.
+- **Up/Down arrows**: change vertical offset between the left and right images.
 - **t**: preview-only left/right swap to help identify channels.
 - **f**: toggle fullscreen preview and stretch to fill the screen (preview only).
 
