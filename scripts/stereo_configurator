@@ -1,27 +1,55 @@
 #!/usr/bin/env python3
 
 import argparse
+import sys
+import termios
+import tty
+import select
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
 
-# Key code maps for OpenCV waitKeyEx across common backends/platforms.
-#
-# Why multiple values?
-# - Windows HighGUI often returns large virtual-key style codes.
-# - Linux/GTK/Qt backends may return X11-style codes (e.g. 65362 for Up).
-# - Some setups only expose the low-byte ASCII-ish values (81/82/83/84).
-#
-# We accept all known variants so arrow controls behave consistently.
-KEY_UP = {2490368, 65362, 82}
-KEY_DOWN = {2621440, 65364, 84}
-KEY_LEFT = {2424832, 65361, 81}
-KEY_RIGHT = {2555904, 65363, 83}
-# Include main keyboard and keypad variants seen across HighGUI backends.
-KEY_PLUS = {ord("+"), ord("="), 65451, 107, 171}
-KEY_MINUS = {ord("-"), ord("_"), 65453, 109, 173}
+# Key code maps for terminal input.
+KEY_UP = "UP"
+KEY_DOWN = "DOWN"
+KEY_LEFT = "LEFT"
+KEY_RIGHT = "RIGHT"
+KEY_PLUS = "+"
+KEY_MINUS = "-"
+KEY_QUIT = "q"
+KEY_FULLSCREEN = "f"
+
+
+class TerminalInput:
+    def __init__(self):
+        self.old_settings = termios.tcgetattr(sys.stdin)
+
+    def __enter__(self):
+        tty.setcbreak(sys.stdin.fileno())
+        return self
+
+    def __exit__(self, type, value, traceback):
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+
+    def get_key(self):
+        if select.select([sys.stdin], [], [], 0)[0]:
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":  # Escape sequence
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A": return KEY_UP
+                    if ch3 == "B": return KEY_DOWN
+                    if ch3 == "C": return KEY_RIGHT
+                    if ch3 == "D": return KEY_LEFT
+                return None
+            if ch in ("q", "\x1b"): return KEY_QUIT
+            if ch in ("f", "F"): return KEY_FULLSCREEN
+            if ch in ("+", "="): return KEY_PLUS
+            if ch in ("-", "_"): return KEY_MINUS
+        return None
 
 
 def clip_int(value: int, min_value: int, max_value: int) -> int:
@@ -100,8 +128,12 @@ def offset_valid_range(working_size: int, eye_size: int):
     min_half = -center
     max_half = crop_total - center
 
-    min_offset = int(np.ceil(2.0 * min_half))
-    max_offset = int(np.floor(2.0 * max_half))
+    # Ensure we stay 1px away from the absolute edge to avoid empty crops due to rounding
+    min_offset = int(np.ceil(2.0 * min_half)) + 1
+    max_offset = int(np.floor(2.0 * max_half)) - 1
+    
+    if min_offset > max_offset:
+        return 0, 0
     return min_offset, max_offset
 
 
@@ -210,11 +242,8 @@ def print_pipeline(
     print(stream)
 
 
-def key_matches(code: int, expected: set[int]) -> bool:
-    if code in expected:
-        return True
-    # Some builds encode arrow keys with useful info in the low byte only.
-    return (code & 0xFF) in expected
+def key_matches(code: str, expected: str) -> bool:
+    return code == expected
 
 
 def set_fullscreen(window_name: str, enabled: bool):
@@ -231,17 +260,17 @@ def main() -> int:
             "Uses OpenCV preview and prints a stream string for copy/paste into JSON config."
         )
     )
-    parser.add_argument("-f", "--first", required=True, help="First source GStreamer snippet")
-    parser.add_argument("-s", "--second", required=True, help="Second source GStreamer snippet")
+    parser.add_argument("-l", "--left", required=True, help="Left source GStreamer snippet")
+    parser.add_argument("-r", "--right", required=True, help="Right source GStreamer snippet")
     args = parser.parse_args()
 
-    first_gst = args.first.strip()
-    second_gst = args.second.strip()
+    first_gst = args.left.strip()
+    second_gst = args.right.strip()
     if not first_gst or not second_gst:
-        raise RuntimeError("Both --first and --second must be non-empty GStreamer snippets")
+        raise RuntimeError("Both --left and --right must be non-empty GStreamer snippets")
 
-    first_cap = open_capture("first", first_gst)
-    second_cap = open_capture("second", second_gst)
+    first_cap = open_capture("left", first_gst)
+    second_cap = open_capture("right", second_gst)
 
     ok_first, first_frame = first_cap.read()
     ok_second, second_frame = second_cap.read()
@@ -253,19 +282,22 @@ def main() -> int:
     working_h = min(first_src_h, second_src_h)
     working_w = min(first_src_w, second_src_w)
 
-    preview_swapped = False
     preview_fullscreen = False
     resize_percent = 100
     baseline_px = 0
     vertical_offset_px = 0
     window_name = "stereo_preview"
+    overlay_window_name = "stereo_overlay"
 
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_NORMAL)
     cv2.resizeWindow(window_name, max(960, 2 * working_w), max(360, working_h))
+    
+    cv2.namedWindow(overlay_window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_NORMAL)
+    cv2.resizeWindow(overlay_window_name, max(480, working_w), max(360, working_h))
 
     print(
         "Detected source frame sizes: "
-        f"first={first_src_w}x{first_src_h}, second={second_src_w}x{second_src_h}, "
+        f"left={first_src_w}x{first_src_h}, right={second_src_w}x{second_src_h}, "
         f"working={working_w}x{working_h}"
     )
 
@@ -284,6 +316,170 @@ def main() -> int:
         vertical_offset_px,
     )
     side_by_side = "LR"
+
+    with TerminalInput() as term:
+        while True:
+            ok_first, first_frame = first_cap.read()
+            ok_second, second_frame = second_cap.read()
+
+            if not ok_first or first_frame is None:
+                first_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ok_first, first_frame = first_cap.read()
+            if not ok_second or second_frame is None:
+                second_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ok_second, second_frame = second_cap.read()
+            if not ok_first or not ok_second or first_frame is None or second_frame is None:
+                continue
+
+            first_tile = crop_frame(first_frame, compute_center_crop(first_frame.shape[1], first_frame.shape[0], working_w, working_h))
+            second_tile = crop_frame(second_frame, compute_center_crop(second_frame.shape[1], second_frame.shape[0], working_w, working_h))
+
+            eye_w, eye_h = compute_eye_size(working_w, working_h, resize_percent)
+            baseline_px = clamp_offset_to_valid(working_w, eye_w, baseline_px)
+            vertical_offset_px = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px)
+            baseline_min, baseline_max = offset_valid_range(working_w, eye_w)
+            vertical_min, vertical_max = offset_valid_range(working_h, eye_h)
+            left_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, vertical_offset_px, sign=-1)
+            right_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, vertical_offset_px, sign=1)
+
+            first_out = crop_frame(first_tile, left_crop)
+            second_out = crop_frame(second_tile, right_crop)
+
+            if first_out.size == 0 or second_out.size == 0:
+                print(f"[ERROR] Crop resulted in empty frame: left_out={first_out.shape}, right_out={second_out.shape}")
+                continue
+
+            preview = np.hstack([first_out, second_out])
+
+            fullscreen_mode = "on" if preview_fullscreen else "off"
+            info = (
+                f"{side_by_side} | src:{working_w}x{working_h} | eye:{eye_w}x{eye_h} | resize:{resize_percent}% | baseline:{baseline_px}px | "
+                f"vertical:{vertical_offset_px}px | fullscreen:{fullscreen_mode}"
+            )
+            baseline_info = (
+                f"horizontal range: [{baseline_min}, {baseline_max}] px | "
+                f"vertical range: [{vertical_min}, {vertical_max}] px"
+            )
+            controls = "+/-: resize (>100 enables offsets)  arrows: horizontal/vertical offset  f:fullscreen stretch  q/esc:quit"
+            cv2.putText(preview, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.putText(preview, baseline_info, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(preview, controls, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+            # Labels for inputs, centered at bottom of each tile
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.8
+            thickness = 2
+            
+            left_size = cv2.getTextSize("left", font, font_scale, thickness)[0]
+            right_size = cv2.getTextSize("right", font, font_scale, thickness)[0]
+            
+            left_x = (eye_w - left_size[0]) // 2
+            right_x = eye_w + (eye_w - right_size[0]) // 2
+            label_y = preview.shape[0] - 15
+
+            cv2.putText(preview, "left", (left_x, label_y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+            cv2.putText(preview, "right", (right_x, label_y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA)
+
+            display_frame = preview
+            if preview_fullscreen:
+                try:
+                    _, _, win_w, win_h = cv2.getWindowImageRect(window_name)
+                    if win_w > 0 and win_h > 0:
+                        display_frame = cv2.resize(preview, (win_w, win_h), interpolation=cv2.INTER_LINEAR)
+                except cv2.error:
+                    pass
+
+            cv2.imshow(window_name, display_frame)
+
+            # --- Overlay Window (Superimposed) ---
+            # Convert to grayscale
+            gray1 = cv2.cvtColor(first_out, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(second_out, cv2.COLOR_BGR2GRAY)
+            
+            # Convert back to BGR for color manipulation
+            # Note: OpenCV BGR order
+            bgr1 = cv2.cvtColor(gray1, cv2.COLOR_GRAY2BGR).astype(np.int16)
+            bgr2 = cv2.cvtColor(gray2, cv2.COLOR_GRAY2BGR).astype(np.int16)
+            
+            # For one channel: add 40 to green (index 1)
+            bgr1[:, :, 1] = np.clip(bgr1[:, :, 1] + 40, 0, 255)
+            # For second channel: subtract 40 from green
+            bgr2[:, :, 1] = np.clip(bgr2[:, :, 1] - 40, 0, 255)
+            
+            # Average of both transformed images
+            overlay = ((bgr1 + bgr2) / 2).astype(np.uint8)
+            
+            cv2.putText(overlay, "OVERLAY VIEW", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
+            cv2.imshow(overlay_window_name, overlay)
+
+            # Draw one frame per ~10ms. Need waitKey(1) for HighGUI updates.
+            cv2.waitKey(1)
+            key = term.get_key()
+            changed = False
+
+            if key == KEY_QUIT:
+                break
+            elif key == KEY_FULLSCREEN:
+                preview_fullscreen = not preview_fullscreen
+                set_fullscreen(window_name, preview_fullscreen)
+                print(f"Fullscreen: {'ON' if preview_fullscreen else 'OFF'}")
+            # Controls:
+            #   +/-       -> resize crop rectangle
+            #   Left/Right-> horizontal baseline shift
+            #   Up/Down   -> vertical offset shift
+            elif key == KEY_PLUS:
+                updated_resize = clip_int(resize_percent + 1, 100, 200)
+                changed = updated_resize != resize_percent
+                resize_percent = updated_resize
+                if changed: print(f"Size: {resize_percent}%")
+            elif key == KEY_MINUS:
+                updated_resize = clip_int(resize_percent - 1, 100, 200)
+                changed = updated_resize != resize_percent
+                resize_percent = updated_resize
+                if changed: print(f"Size: {resize_percent}%")
+            elif key == KEY_LEFT:
+                updated_baseline = clamp_offset_to_valid(working_w, eye_w, baseline_px - 1)
+                changed = updated_baseline != baseline_px
+                baseline_px = updated_baseline
+                if changed: print(f"Horizontal Shift: {baseline_px} px")
+            elif key == KEY_RIGHT:
+                updated_baseline = clamp_offset_to_valid(working_w, eye_w, baseline_px + 1)
+                changed = updated_baseline != baseline_px
+                baseline_px = updated_baseline
+                if changed: print(f"Horizontal Shift: {baseline_px} px")
+            elif key == KEY_UP:
+                updated_vertical = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px - 1)
+                changed = updated_vertical != vertical_offset_px
+                vertical_offset_px = updated_vertical
+                if changed: print(f"Vertical Shift: {vertical_offset_px} px")
+            elif key == KEY_DOWN:
+                updated_vertical = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px + 1)
+                changed = updated_vertical != vertical_offset_px
+                vertical_offset_px = updated_vertical
+                if changed: print(f"Vertical Shift: {vertical_offset_px} px")
+
+            if changed:
+                eye_w, eye_h = compute_eye_size(working_w, working_h, resize_percent)
+                baseline_px = clamp_offset_to_valid(working_w, eye_w, baseline_px)
+                vertical_offset_px = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px)
+                stream_string = build_stream_string(
+                    first_gst,
+                    second_gst,
+                    first_src_w,
+                    first_src_h,
+                    second_src_w,
+                    second_src_h,
+                    working_w,
+                    working_h,
+                    resize_percent,
+                    baseline_px,
+                    vertical_offset_px,
+                )
+
+    first_cap.release()
+    second_cap.release()
+    cv2.destroyAllWindows()
+
     print_pipeline(
         stream_string,
         side_by_side,
@@ -295,150 +491,6 @@ def main() -> int:
         eye_w,
         eye_h,
     )
-
-    while True:
-        ok_first, first_frame = first_cap.read()
-        ok_second, second_frame = second_cap.read()
-
-        if not ok_first or first_frame is None:
-            first_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ok_first, first_frame = first_cap.read()
-        if not ok_second or second_frame is None:
-            second_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ok_second, second_frame = second_cap.read()
-        if not ok_first or not ok_second or first_frame is None or second_frame is None:
-            continue
-
-        first_tile = crop_frame(first_frame, compute_center_crop(first_frame.shape[1], first_frame.shape[0], working_w, working_h))
-        second_tile = crop_frame(second_frame, compute_center_crop(second_frame.shape[1], second_frame.shape[0], working_w, working_h))
-
-        if preview_swapped:
-            first_tile, second_tile = second_tile, first_tile
-
-        eye_w, eye_h = compute_eye_size(working_w, working_h, resize_percent)
-        baseline_px = clamp_offset_to_valid(working_w, eye_w, baseline_px)
-        vertical_offset_px = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px)
-        baseline_min, baseline_max = offset_valid_range(working_w, eye_w)
-        vertical_min, vertical_max = offset_valid_range(working_h, eye_h)
-        left_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, vertical_offset_px, sign=-1)
-        right_crop = compute_eye_crop(working_w, working_h, eye_w, eye_h, baseline_px, vertical_offset_px, sign=1)
-
-        first_out = crop_frame(first_tile, left_crop)
-        second_out = crop_frame(second_tile, right_crop)
-        preview = np.hstack([first_out, second_out])
-
-        preview_mode = "swapped" if preview_swapped else "normal"
-        fullscreen_mode = "on" if preview_fullscreen else "off"
-        info = (
-            f"{side_by_side} | src:{working_w}x{working_h} | eye:{eye_w}x{eye_h} | resize:{resize_percent}% | baseline:{baseline_px}px | "
-            f"vertical:{vertical_offset_px}px | preview:{preview_mode} | fullscreen:{fullscreen_mode}"
-        )
-        baseline_info = (
-            f"horizontal range: [{baseline_min}, {baseline_max}] px | "
-            f"vertical range: [{vertical_min}, {vertical_max}] px"
-        )
-        controls = "+/-: resize (>100 enables offsets)  arrows: horizontal/vertical offset  t:preview-swap  f:fullscreen stretch  q/esc:quit"
-        cv2.putText(preview, info, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2, cv2.LINE_AA)
-        cv2.putText(preview, baseline_info, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(preview, controls, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-
-        display_frame = preview
-        if preview_fullscreen:
-            try:
-                _, _, win_w, win_h = cv2.getWindowImageRect(window_name)
-                if win_w > 0 and win_h > 0:
-                    display_frame = cv2.resize(preview, (win_w, win_h), interpolation=cv2.INTER_LINEAR)
-            except cv2.error:
-                pass
-
-        cv2.imshow(window_name, display_frame)
-
-        key = cv2.waitKeyEx(1)
-        changed = False
-
-        if key not in (-1, 0):
-            print(f"[DEBUG] key={key} (0x{key & 0xFFFFFF:06x})")
-
-        if key in (27, ord("q")):
-            break
-        if key in (ord("t"), ord("T")):
-            preview_swapped = not preview_swapped
-        elif key in (ord("f"), ord("F")):
-            preview_fullscreen = not preview_fullscreen
-            set_fullscreen(window_name, preview_fullscreen)
-        # Controls:
-        #   +/-       -> resize crop rectangle
-        #   Left/Right-> horizontal baseline shift
-        #   Up/Down   -> vertical offset shift
-        elif key_matches(key, KEY_PLUS):
-            updated_resize = clip_int(resize_percent + 1, 100, 200)
-            changed = updated_resize != resize_percent
-            resize_percent = updated_resize
-        elif key_matches(key, KEY_MINUS):
-            updated_resize = clip_int(resize_percent - 1, 100, 200)
-            changed = updated_resize != resize_percent
-            resize_percent = updated_resize
-        elif key_matches(key, KEY_LEFT):
-            old = baseline_px
-            rng = offset_valid_range(working_w, eye_w)
-            updated_baseline = clamp_offset_to_valid(working_w, eye_w, baseline_px - 10)
-            changed = updated_baseline != baseline_px
-            baseline_px = updated_baseline
-            print(f"[DEBUG] LEFT: baseline {old} -> {baseline_px}, range={rng}, eye_w={eye_w}, working_w={working_w}, resize={resize_percent}%")
-        elif key_matches(key, KEY_RIGHT):
-            old = baseline_px
-            rng = offset_valid_range(working_w, eye_w)
-            updated_baseline = clamp_offset_to_valid(working_w, eye_w, baseline_px + 10)
-            changed = updated_baseline != baseline_px
-            baseline_px = updated_baseline
-            print(f"[DEBUG] RIGHT: baseline {old} -> {baseline_px}, range={rng}, eye_w={eye_w}, working_w={working_w}, resize={resize_percent}%")
-        elif key_matches(key, KEY_UP):
-            old = vertical_offset_px
-            rng = offset_valid_range(working_h, eye_h)
-            updated_vertical = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px - 10)
-            changed = updated_vertical != vertical_offset_px
-            vertical_offset_px = updated_vertical
-            print(f"[DEBUG] UP: vertical {old} -> {vertical_offset_px}, range={rng}, eye_h={eye_h}, working_h={working_h}, resize={resize_percent}%")
-        elif key_matches(key, KEY_DOWN):
-            old = vertical_offset_px
-            rng = offset_valid_range(working_h, eye_h)
-            updated_vertical = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px + 10)
-            changed = updated_vertical != vertical_offset_px
-            vertical_offset_px = updated_vertical
-            print(f"[DEBUG] DOWN: vertical {old} -> {vertical_offset_px}, range={rng}, eye_h={eye_h}, working_h={working_h}, resize={resize_percent}%")
-
-        if changed:
-            eye_w, eye_h = compute_eye_size(working_w, working_h, resize_percent)
-            baseline_px = clamp_offset_to_valid(working_w, eye_w, baseline_px)
-            vertical_offset_px = clamp_offset_to_valid(working_h, eye_h, vertical_offset_px)
-            stream_string = build_stream_string(
-                first_gst,
-                second_gst,
-                first_src_w,
-                first_src_h,
-                second_src_w,
-                second_src_h,
-                working_w,
-                working_h,
-                resize_percent,
-                baseline_px,
-                vertical_offset_px,
-            )
-            print_pipeline(
-                stream_string,
-                side_by_side,
-                resize_percent,
-                baseline_px,
-                vertical_offset_px,
-                working_w,
-                working_h,
-                eye_w,
-                eye_h,
-            )
-
-    first_cap.release()
-    second_cap.release()
-    cv2.destroyAllWindows()
 
     print("\nFinal values for config:")
     print(f"side_by_side: {side_by_side}")
