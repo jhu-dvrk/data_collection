@@ -4,75 +4,9 @@
 #include "audio_stream.hpp"
 
 #include <iostream>
-#include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
-#include <sensor_msgs/image_encodings.hpp>
-#include <rclcpp/rclcpp.hpp>
 
 extern int app_max_threads;
-
-GstFlowReturn on_new_ros_sample(GstElement *sink, gpointer user_data) {
-    VideoStream *s = (VideoStream *)user_data;
-    GstSample *sample;
-    g_signal_emit_by_name(sink, "pull-sample", &sample);
-    if (sample) {
-        GstBuffer *buf = gst_sample_get_buffer(sample);
-        GstCaps *caps = gst_sample_get_caps(sample);
-        GstVideoInfo info;
-
-        if (gst_video_info_from_caps(&info, caps)) {
-            GstVideoFrame frame;
-            if (gst_video_frame_map(&frame, &info, buf, GST_MAP_READ)) {
-                auto msg = std::make_shared<sensor_msgs::msg::Image>();
-                auto info_msg = std::make_shared<sensor_msgs::msg::CameraInfo>();
-
-                struct timespec ts;
-                clock_gettime(CLOCK_REALTIME, &ts);
-                msg->header.stamp.sec = ts.tv_sec;
-                msg->header.stamp.nanosec = ts.tv_nsec;
-                msg->header.frame_id = s->ros_camera_name + "_frame";
-
-                msg->height = GST_VIDEO_INFO_HEIGHT(&info);
-                msg->width = GST_VIDEO_INFO_WIDTH(&info);
-                msg->encoding = sensor_msgs::image_encodings::RGB8;
-                msg->is_bigendian = 0;
-                msg->step = msg->width * 3;
-
-                size_t size = msg->step * msg->height;
-                msg->data.resize(size);
-
-                uint8_t* dst = msg->data.data();
-                uint8_t* src = (uint8_t*)GST_VIDEO_FRAME_PLANE_DATA(&frame, 0);
-                int src_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
-
-                if ((int)msg->step == src_stride) {
-                    memcpy(dst, src, size);
-                } else {
-                    for (int h = 0; h < (int)msg->height; ++h) {
-                        memcpy(dst + (h * msg->step), src + (h * src_stride), msg->step);
-                    }
-                }
-
-                info_msg->header = msg->header;
-                info_msg->height = msg->height;
-                info_msg->width = msg->width;
-                info_msg->distortion_model = "plumb_bob";
-                info_msg->d.resize(5, 0.0);
-                info_msg->k[0] = msg->width; // fx
-                info_msg->k[2] = msg->width / 2.0; // cx
-                info_msg->k[4] = msg->width; // fy
-                info_msg->k[5] = msg->height / 2.0; // cy
-                info_msg->k[8] = 1.0;
-
-                s->ros_publisher.publish(msg, info_msg);
-
-                gst_video_frame_unmap(&frame);
-            }
-        }
-        gst_sample_unref(sample);
-    }
-    return GST_FLOW_OK;
-}
 
 void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, guint64 duration, gpointer user_data) {
     (void)overlay; (void)timestamp; (void)duration;

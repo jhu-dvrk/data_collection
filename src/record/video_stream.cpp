@@ -5,6 +5,8 @@
 #include <fstream>
 #include <algorithm>
 #include <gst/video/video.h>
+#include <pwd.h>
+#include <unistd.h>
 
 extern int app_max_threads;
 
@@ -13,7 +15,7 @@ VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), pre
                 width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                 total_offset_ns(0), last_raw_pts(-1), last_duration(0),
                 last_fps_ts(0), fps_frame_counter(0),
-                ros_camera_name(""), m_ad(NULL) {}
+                m_ad(NULL) {}
 
 VideoStream::~VideoStream() {
     // Pipeline should already be shut down via shutdown()
@@ -43,15 +45,6 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     this->record_enabled = v->record;
     this->side_by_side = v->side_by_side;
     this->estimated_latency = v->estimated_latency;
-    this->ros_camera_name = v->ros_camera_name;
-
-    if (!this->ros_camera_name.empty()) {
-        std::string base_topic = this->ros_camera_name;
-        while (!base_topic.empty() && base_topic[0] == '/') base_topic.erase(0, 1);
-        std::string topic_name = base_topic + "/image_raw";
-        this->ros_publisher = ad->it->advertiseCamera(topic_name, 10);
-        std::cout << "Publishing ROS for stream \"" << v->name << "\" to " << topic_name << std::endl;
-    }
 
     // Recording and encoding caps
     // Use an extra videoconvert to ensure we can reach the desired format/size
@@ -74,32 +67,41 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
                      " ! clockoverlay valignment=bottom halignment=right time-format=\"%Y-%m-%d %H:%M:%S\" font-desc=\"Sans, 10\" shaded-background=true shading-value=255 xpad=0 ypad=0 ";
     }
 
-    std::string gl_tee = "";
-    if (v->tee_glimage_sink) {
-        gl_tee = " ! tee name=__gl_t__ "
-                 "__gl_t__. ! queue max-size-buffers=1 leaky=downstream ! videoconvert ! glimagesink sync=false force-aspect-ratio=false "
-                 "__gl_t__. ! queue max-size-buffers=1 leaky=downstream ";
+    std::string source_stream = v->stream;
+    if (v->has_unixfd_socket_path) {
+        std::string socket_path = v->unixfd_socket_path;
+        if (socket_path.empty()) {
+            // Generate default socket path using username
+            const char* username = getenv("USER");
+            if (!username) {
+                struct passwd* pw = getpwuid(getuid());
+                username = pw ? pw->pw_name : "unknown";
+            }
+            socket_path = "/tmp/dvrk_stereo_viewer_" + std::string(username) + ".sock";
+        }
+        source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=false ! videoconvert ! video/x-raw,format=NV12";
+    }
+
+    if (source_stream.empty()) {
+        std::cerr << "Error for stream \"" << v->name << "\": stream description is empty" << std::endl;
+        return false;
     }
 
     std::string enc = get_best_encoder(v->encoding);
     std::cout << "Using encoder for stream \"" << v->name << "\": " << enc << std::endl;
 
-    std::string pstr = v->stream + gl_tee + ts_overlay + " ! tee name=__rec_t__ "
+    std::string pstr = source_stream + ts_overlay + " ! tee name=__rec_t__ "
         "__rec_t__. ! queue name=__prev_q__ max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=__prev_overlay__ ! gtksink name=__prev_sink__ sync=false async=false ";
 
     if (this->record_enabled) {
         pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true" + rec_pipeline_segment + " ! " + rec_caps + " ! " + enc + " ! queue name=__rec_q_enc__ max-size-buffers=30 max-size-time=0 max-size-bytes=0 ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
     }
 
-    if (!this->ros_camera_name.empty()) {
-        pstr += " __rec_t__. ! queue name=__ros_q__ max-size-buffers=2 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! video/x-raw,format=RGB ! appsink name=__ros_sink__ sync=false async=false emit-signals=true ";
-    }
-
     // Warning for two sources but side_by_side setting missing
-    if (this->side_by_side == "undefined") {
+    if (!v->has_unixfd_socket_path && this->side_by_side == "undefined") {
         size_t pos = 0;
         int sources = 0;
-        while ((pos = v->stream.find("src", pos)) != std::string::npos) {
+        while ((pos = source_stream.find("src", pos)) != std::string::npos) {
             sources++;
             pos += 3;
         }
@@ -159,14 +161,6 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
         g_object_get(sink, "widget", &this->preview_widget, NULL);
         gtk_widget_set_size_request(this->preview_widget, 320, 240);
         gst_object_unref(sink);
-    }
-
-    if (!v->ros_camera_name.empty()) {
-        GstElement *ros_sink = gst_bin_get_by_name(GST_BIN(this->pipeline), "__ros_sink__");
-        if (ros_sink) {
-            g_signal_connect(ros_sink, "new-sample", G_CALLBACK(on_new_ros_sample), this);
-            gst_object_unref(ros_sink);
-        }
     }
 
     // Set output paths from session data

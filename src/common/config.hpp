@@ -20,11 +20,11 @@ struct VideoEncoding {
 struct VideoConfig {
     std::string name;
     std::string stream;
+    bool has_unixfd_socket_path = false;
+    std::string unixfd_socket_path = "";
     VideoEncoding encoding;
     bool record = true;
     bool timestamp_overlay = false;
-    bool tee_glimage_sink = false;
-    std::string ros_camera_name = "";
     std::string side_by_side = "undefined";
     double estimated_latency = 0.0;
 };

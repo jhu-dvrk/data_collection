@@ -46,8 +46,7 @@
       "items": {
         "type": "object",
         "required": [
-          "name",
-          "stream"
+          "name"
         ],
         "properties": {
           "name": {
@@ -56,7 +55,11 @@
           },
           "stream": {
             "type": "string",
-            "description": "GStreamer source pipeline description (e.g. 'v4l2src device=/dev/video0')"
+            "description": "GStreamer source pipeline description (e.g. 'v4l2src device=/dev/video0'). Ignored when unixfd_socket_path is defined."
+          },
+          "unixfd_socket_path": {
+            "type": "string",
+            "description": "If defined (even if empty), use unixfdsrc to subscribe to dvrk_stereo_viewer via UNIX socket. If empty, auto-generates socket path with username. If not defined, uses stream field instead."
           },
           "record": {
             "type": "boolean",
@@ -66,15 +69,6 @@
           "timestamp_overlay": {
             "type": "boolean",
             "description": "Whether to burn GStreamer and wall-clock timestamps into the video preview",
-            "default": false
-          },
-          "ros_camera_name": {
-            "type": "string",
-            "description": "If set, the video stream is also published as a ROS 2 image topic using image_transport. The value becomes the base topic name: <ros_camera_name>/image_raw and <ros_camera_name>/camera_info are published."
-          },
-          "tee_glimage_sink": {
-            "type": "boolean",
-            "description": "If true, adds a separate glimagesink window with free aspect ratio right after the source, before timestamp overlays and recording.",
             "default": false
           },
           "side_by_side": {

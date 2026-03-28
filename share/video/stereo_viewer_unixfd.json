@@ -1,0 +1,15 @@
+{
+  "type": "dc::config@1.0.0",
+  "videos": [
+    {
+      "name": "dvrk_stereo_viewer",
+      "unixfd_socket_path": "",
+      "record": true,
+      "timestamp_overlay": false,
+      "encoding": {
+        "bitrate": 20000,
+        "frame_rate": 30
+      }
+    }
+  ]
+}

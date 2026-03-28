@@ -12,9 +12,6 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <sensor_msgs/msg/image.hpp>
-#include <sensor_msgs/msg/camera_info.hpp>
-#include <image_transport/image_transport.hpp>
 
 extern int app_max_threads;
 
@@ -60,7 +57,6 @@ struct AppData {
     // ROS 2 members
     std::string trigger_topic;
     std::shared_ptr<rclcpp::Node> node;
-    std::shared_ptr<image_transport::ImageTransport> it;
     std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Bool>> sub_record;
     std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> pub_recording;
 

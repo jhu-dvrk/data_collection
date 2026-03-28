@@ -11,9 +11,6 @@
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>image_transport</depend>
-  <depend>image_transport_plugins</depend>
-  <depend>camera_info_manager</depend>
   <depend>rosbag2_cpp</depend>
   <depend>ament_index_cpp</depend>
   <build_depend>ament_cmake</build_depend>

@@ -5,7 +5,6 @@
 #include <vector>
 #include <gtk/gtk.h>
 #include <gst/gst.h>
-#include <image_transport/image_transport.hpp>
 #include "common_types.hpp"
 #include "../common/config.hpp"
 
@@ -46,10 +45,7 @@ public:
     // FPS Calculation
     long long last_fps_ts, fps_frame_counter;
 
-    // ROS 2 Video
-    std::string ros_camera_name;
     std::string side_by_side;
-    image_transport::CameraPublisher ros_publisher;
 
 private:
     AppData* m_ad;

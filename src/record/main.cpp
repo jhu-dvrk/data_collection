@@ -93,7 +93,6 @@ int main(int argc, char *argv[]) {
     // ROS 2 Initialization
     rclcpp::init(argc, argv);
     data.node = std::make_shared<rclcpp::Node>("record_c");
-    data.it = std::make_shared<image_transport::ImageTransport>(data.node);
     data.pub_recording = data.node->create_publisher<std_msgs::msg::Bool>("record/recording", 10);
 
     if (data.trigger_topic.empty()) {
@@ -226,10 +225,6 @@ int main(int argc, char *argv[]) {
     // Explicitly reset ROS objects before shutdown to avoid class_loader warnings
     data.sub_record.reset();
     data.pub_recording.reset();
-    for (auto s : data.streams) {
-        s->ros_publisher = image_transport::CameraPublisher();
-    }
-    data.it.reset();
     data.timers.clear();
     data.bag_subs.clear();
     data.bag_writer.reset();

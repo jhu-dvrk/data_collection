@@ -66,10 +66,12 @@ std::vector<VideoConfig> Config::parse_videos(const Json::Value& root) {
         VideoConfig cfg;
         if (v.isMember("name")) cfg.name = v["name"].asString();
         if (v.isMember("stream")) cfg.stream = v["stream"].asString();
+        if (v.isMember("unixfd_socket_path")) {
+            cfg.has_unixfd_socket_path = true;
+            cfg.unixfd_socket_path = v["unixfd_socket_path"].asString();
+        }
         if (v.isMember("record")) cfg.record = v["record"].asBool();
         if (v.isMember("timestamp_overlay")) cfg.timestamp_overlay = v["timestamp_overlay"].asBool();
-        if (v.isMember("tee_glimage_sink")) cfg.tee_glimage_sink = v["tee_glimage_sink"].asBool();
-        if (v.isMember("ros_camera_name")) cfg.ros_camera_name = v["ros_camera_name"].asString();
         if (v.isMember("side_by_side")) cfg.side_by_side = v["side_by_side"].asString();
         if (v.isMember("estimated_latency")) cfg.estimated_latency = v["estimated_latency"].asDouble();
 
