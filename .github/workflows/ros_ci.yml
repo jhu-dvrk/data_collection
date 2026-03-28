@@ -39,10 +39,7 @@ jobs:
             python3-colcon-common-extensions \
             python3-rosdep \
             python3-opencv \
-            python3-numpy \
-            ros-jazzy-camera-info-manager \
-            ros-jazzy-image-transport \
-            ros-jazzy-image-transport-plugins
+            python3-numpy
           
           # Initialize rosdep if not already done
           if [ ! -d /etc/ros/rosdep/sources.list.d ]; then

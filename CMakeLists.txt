@@ -15,7 +15,6 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(sensor_msgs REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -55,7 +54,6 @@ add_executable(record
 ament_target_dependencies(record
   rclcpp
   std_msgs
-  sensor_msgs
   rosbag2_cpp
 )
 target_include_directories(record PRIVATE
@@ -148,7 +146,6 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/extract
   scripts/encord_to_tags
-  scripts/stereo_configurator
   DESTINATION lib/${PROJECT_NAME}
 )
 
