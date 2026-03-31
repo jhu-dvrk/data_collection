@@ -1,0 +1,22 @@
+{
+  "type": "dc::config@1.0.0",
+    "videos": [
+	{
+	    "name": "left",
+	    "stream": "v4l2src device=/dev/video0 ! videoconvert",
+	    "record": true,
+	    "encoding": {
+		"bitrate": 20000
+	    }
+	},
+	{
+	    "name": "right",
+	    "stream": "v4l2src device=/dev/video2 ! videoconvert",
+	    "record": true,
+	    "encoding": {
+		"bitrate": 20000
+	    }
+	}
+	
+    ]
+}
