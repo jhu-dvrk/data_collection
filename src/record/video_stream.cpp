@@ -13,6 +13,7 @@ extern int app_max_threads;
 VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL),
                 is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0), estimated_latency(0.0),
                 width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
+                rec_width(0), rec_height(0), rec_fps_requested(0.0),
                 total_offset_ns(0), last_raw_pts(-1), last_duration(0),
                 last_fps_ts(0), fps_frame_counter(0),
                 m_ad(NULL) {}
@@ -46,17 +47,26 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     this->side_by_side = v->side_by_side;
     this->estimated_latency = v->estimated_latency;
 
+    this->rec_width = v->encoding.width;
+    this->rec_height = v->encoding.height;
+    this->rec_fps_requested = (double)v->encoding.frame_rate;
+
     // Recording and encoding caps
     // Use an extra videoconvert to ensure we can reach the desired format/size
     std::string rec_pipeline_segment = "";
     std::string rec_caps = "video/x-raw,format=NV12";
     
-    if ((v->encoding.width > 0 && v->encoding.height > 0) || v->encoding.frame_rate > 0) {
-        rec_pipeline_segment = " ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! videoscale ! videorate";
-        if (v->encoding.width > 0 && v->encoding.height > 0) {
+    bool needs_scale = v->encoding.width > 0 && v->encoding.height > 0;
+    bool needs_rate = v->encoding.frame_rate > 0;
+
+    if (needs_scale || needs_rate) {
+        rec_pipeline_segment = " ! videoconvert n-threads=" + std::to_string(app_max_threads);
+        if (needs_scale) {
+            rec_pipeline_segment += " ! videoscale";
             rec_caps += ",width=" + std::to_string(v->encoding.width) + ",height=" + std::to_string(v->encoding.height);
         }
-        if (v->encoding.frame_rate > 0) {
+        if (needs_rate) {
+            rec_pipeline_segment += " ! videorate skip-to-first=true";
             rec_caps += ",framerate=" + std::to_string(v->encoding.frame_rate) + "/1";
         }
     }
@@ -94,7 +104,7 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
         "__rec_t__. ! queue name=__prev_q__ max-size-buffers=1 max-size-time=0 max-size-bytes=0 leaky=downstream ! videoconvert n-threads=" + std::to_string(app_max_threads) + " ! cairooverlay name=__prev_overlay__ ! gtksink name=__prev_sink__ sync=false async=false ";
 
     if (this->record_enabled) {
-        pstr += "__rec_t__. ! queue name=__rec_q_rec__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream ! valve name=__rec_v__ drop=true" + rec_pipeline_segment + " ! " + rec_caps + " ! " + enc + " ! queue name=__rec_q_enc__ max-size-buffers=30 max-size-time=0 max-size-bytes=0 ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
+        pstr += "__rec_t__. ! valve name=__rec_v__ drop=true ! queue name=__rec_q_rec__ max-size-buffers=10 max-size-time=0 max-size-bytes=0 leaky=downstream" + rec_pipeline_segment + " ! " + rec_caps + " ! " + enc + " ! queue name=__rec_q_enc__ max-size-buffers=30 max-size-time=0 max-size-bytes=0 ! h264parse ! mp4mux name=__rec_mux__ ! filesink name=__rec_filesink__ sync=false async=false";
     }
 
     // Warning for two sources but side_by_side setting missing
@@ -190,6 +200,10 @@ void VideoStream::set_recording(bool active) {
 }
 
 void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
+    this->last_run_frames_recorded = this->frames_recorded;
+    if (m_ad && m_ad->current_stage_idx >= 0 && m_ad->current_stage_idx < (int)m_ad->config_stages.size()) {
+        this->last_run_stage_name = m_ad->config_stages[m_ad->current_stage_idx];
+    }
     this->set_recording(false);
 
     if (this->record_enabled && !this->output_json.empty()) {

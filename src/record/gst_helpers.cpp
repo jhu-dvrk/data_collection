@@ -12,26 +12,42 @@ void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, gu
     (void)overlay; (void)timestamp; (void)duration;
     VideoStream *s = (VideoStream *)user_data;
 
-    if (s->is_recording && s->frames_recorded < 0) { // Special flag for black flash
+    // Overlay is only visible during recording
+    if (!s->is_recording) return;
+
+    if (s->frames_recorded < 0) { // Special flag for black flash
         cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
         cairo_paint(cr);
         return;
     }
 
-    if (s->is_recording) {
-        double base_size = 24.0;
-        double scale = 1.0;
-        if (s->width > 0 && s->height > 0) {
-            scale = std::min(s->width / 640.0, s->height / 480.0);
-            scale = std::max(0.5, std::min(scale, 4.0));
-        }
-
-        cairo_set_source_rgb(cr, 1.0, 0.0, 0.0); // Red
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-        cairo_set_font_size(cr, base_size * scale);
-        cairo_move_to(cr, 20 * scale, 40 * scale);
-        cairo_show_text(cr, "REC");
+    double base_size = 20.0;
+    double scale = 1.0;
+    if (s->width > 0 && s->height > 0) {
+        scale = std::min(s->width / 640.0, s->height / 480.0);
+        scale = std::max(0.5, std::min(scale, 4.0));
     }
+
+    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, base_size * scale);
+
+    char status_buf[256];
+    int rw = s->rec_width > 0 ? s->rec_width : s->width;
+    int rh = s->rec_height > 0 ? s->rec_height : s->height;
+    double rf = s->rec_fps_requested > 0.1 ? s->rec_fps_requested : s->src_fps;
+    
+    snprintf(status_buf, sizeof(status_buf), "REC %dx%d %.1f | LIVE %.1f", 
+             rw, rh, rf, s->current_fps);
+
+    // Draw shadow
+    cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+    cairo_move_to(cr, 21.0 * scale, (double)s->height - (21.0 * scale));
+    cairo_show_text(cr, status_buf);
+
+    // Draw text (Red for Recording)
+    cairo_set_source_rgb(cr, 1.0, 0.0, 0.0);
+    cairo_move_to(cr, 20.0 * scale, (double)s->height - (22.0 * scale));
+    cairo_show_text(cr, status_buf);
 }
 
 std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
@@ -54,7 +70,10 @@ std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
                 }
             }
             if (name == "vaapih264enc") return "vaapih264enc bitrate=" + std::to_string(br);
-            if (name == "x264enc") return "x264enc bitrate=" + std::to_string(br) + " speed-preset=" + std::to_string(preset) + " tune=zerolatency key-int-max=" + std::to_string(keyint) + " threads=" + std::to_string(app_max_threads);
+            if (name == "x264enc") {
+                int used_preset = (preset > 0 ? preset : 1);
+                return "x264enc bitrate=" + std::to_string(br) + " speed-preset=" + std::to_string(used_preset) + " tune=zerolatency key-int-max=" + std::to_string(keyint) + " threads=" + std::to_string(app_max_threads) + " bframes=0";
+            }
         }
     }
     return "x264enc";

@@ -39,6 +39,10 @@ public:
     double src_fps;
     long long last_src_ts, src_frame_counter;
 
+    // Recording Config
+    int rec_width, rec_height;
+    double rec_fps_requested;
+
     // Stitching / Gapless
     long long total_offset_ns, last_raw_pts, last_duration;
 
