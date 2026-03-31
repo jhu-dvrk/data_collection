@@ -59,7 +59,7 @@
           },
           "unixfd_socket_path": {
             "type": "string",
-            "description": "If defined (even if empty), use unixfdsrc to subscribe to dvrk_stereo_viewer via UNIX socket. If empty, auto-generates socket path with username. If not defined, uses stream field instead."
+            "description": "If defined (even if empty), use unixfdsrc to subscribe to dvrk_display via UNIX socket. If empty, auto-generates socket path with username. If not defined, uses stream field instead."
           },
           "record": {
             "type": "boolean",

@@ -2,7 +2,7 @@
   "type": "dc::config@1.0.0",
   "videos": [
     {
-      "name": "dvrk_stereo_viewer",
+      "name": "dvrk_display",
       "unixfd_socket_path": "",
       "record": true,
       "timestamp_overlay": false,

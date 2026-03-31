@@ -77,7 +77,7 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
                 struct passwd* pw = getpwuid(getuid());
                 username = pw ? pw->pw_name : "unknown";
             }
-            socket_path = "/tmp/dvrk_stereo_viewer_" + std::string(username) + ".sock";
+            socket_path = "/tmp/dvrk_display_" + std::string(username) + ".sock";
         }
         source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=false ! videoconvert ! video/x-raw,format=NV12";
     }
