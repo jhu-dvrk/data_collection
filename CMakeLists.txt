@@ -33,6 +33,7 @@ target_include_directories(data_collection_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/common>
   $<INSTALL_INTERFACE:include>
   ${JSONCPP_INCLUDE_DIRS}
+  ${GST_INCLUDE_DIRS}
 )
 ament_target_dependencies(data_collection_lib
   ament_index_cpp

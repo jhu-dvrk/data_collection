@@ -186,10 +186,7 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
         // Capture original PTS
         long long gst_ts = pts;
 
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-        s->frames.push_back({cpu_ts, gst_ts});
+        s->frames.push_back({0, gst_ts}); // cpu_ts = 0 for now, will be mapped later
         s->frames_recorded++;
 
         long long now = g_get_monotonic_time();

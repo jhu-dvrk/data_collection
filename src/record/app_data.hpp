@@ -12,6 +12,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/header.hpp>
 
 extern int app_max_threads;
 
@@ -58,6 +59,7 @@ struct AppData {
     std::string trigger_topic;
     std::shared_ptr<rclcpp::Node> node;
     std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Bool>> sub_record;
+    std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Header>> sub_unixfd_ts;
     std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> pub_recording;
 
     // ROS Bag members
@@ -76,6 +78,8 @@ struct AppData {
     bool explicit_stages;
 
     std::mutex data_mutex;
+    std::mutex ts_map_mutex;
+    std::map<long long, long long> pts_to_cpu_ts;
 
     AppData();
     ~AppData();

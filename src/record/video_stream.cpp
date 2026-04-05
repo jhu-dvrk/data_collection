@@ -218,7 +218,16 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
         root["estimated_latency_ms"] = this->estimated_latency;
 
         Json::Value frame_list = Json::arrayValue;
-        for (const auto& f : this->frames) {
+        for (auto& f : this->frames) {
+            // Late lookup for cpu_ts using pts
+            if (f.cpu_ts == 0 && m_ad) {
+                std::lock_guard<std::mutex> lock(m_ad->ts_map_mutex);
+                auto it = m_ad->pts_to_cpu_ts.find(f.gst_ts);
+                if (it != m_ad->pts_to_cpu_ts.end()) {
+                    f.cpu_ts = it->second;
+                }
+            }
+
             Json::Value fv;
             fv["cpu_ns"] = (Json::Value::Int64)f.cpu_ts;
             fv["gst_ns"] = (Json::Value::Int64)f.gst_ts;

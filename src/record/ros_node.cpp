@@ -152,4 +152,15 @@ void setup_ros_monitoring(AppData* ad) {
     // Create timer (1s period)
     auto timer = ad->node->create_wall_timer(std::chrono::seconds(1), timer_cb);
     ad->timers.push_back(timer);
+
+    // Subscribe to timestamps for unixfd sync (high reliability QoS)
+    const rclcpp::QoS timestamp_qos = rclcpp::QoS(rclcpp::KeepLast(100)).reliable();
+    ad->sub_unixfd_ts = ad->node->create_subscription<std_msgs::msg::Header>(
+        "unixfd_timestamps", timestamp_qos,
+        [ad](const std_msgs::msg::Header::SharedPtr msg) {
+            long long pts = (long long)msg->stamp.sec * 1000000000LL + msg->stamp.nanosec;
+            long long cpu_ts = std::stoll(msg->frame_id);
+            std::lock_guard<std::mutex> lock(ad->ts_map_mutex);
+            ad->pts_to_cpu_ts[pts] = cpu_ts;
+        });
 }
