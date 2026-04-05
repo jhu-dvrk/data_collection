@@ -3,7 +3,7 @@
 
 struct FrameData {
     long long cpu_ts;
-    long long gst_ts;
+    long long buffer_ts_ns;
 };
 
 #endif // COMMON_TYPES_HPP

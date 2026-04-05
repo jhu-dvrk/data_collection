@@ -5,6 +5,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include "ros_node.hpp"
 #include "ui.hpp"
+#include "video_stream.hpp"
 
 // Since context.hpp only has forward decls, we need to include headers here
 // But wait, rosbag2_storage might not be included in ui.hpp either.
@@ -76,11 +77,11 @@ void close_bag_writer(AppData* ad) {
 }
 
 void setup_ros_monitoring(AppData* ad) {
-    if (ad->ros_topics.empty()) return;
-
+    if (!ad || !ad->node) return;
+    
+    // Timer-based check for generic topics (bags)
     auto timer_cb = [ad]() {
-        if (ad->ros_topics.empty()) return;
-
+        if (!ad->node) return;
         auto topic_names_and_types = ad->node->get_topic_names_and_types();
 
         // Update topic count stats
@@ -107,18 +108,6 @@ void setup_ros_monitoring(AppData* ad) {
                     std::lock_guard<std::mutex> lock(ad->data_mutex);
                     if (ad->global_recording && ad->bag_writer) {
                         try {
-                             // Attempt to write. Topic creation is done at open,
-                             // but if this is a NEW topic discovered during recording,
-                             // we must ensure it exists.
-                             // rosbag2_cpp checks existence.
-                             // We blindly try to create it if we suspect it's new?
-                             // Optimization: Just Try-Catch write.
-                             // Actually, write() crashes/throws if topic missing? Yes.
-
-                             // Let's rely on open_bag_writer for existing ones.
-                             // For late joiners:
-                             // We can't query bag_writer for existence cheaply.
-                             // We'll just create_topic just in case?
                              rosbag2_storage::TopicMetadata tm;
                              tm.name = topic;
                              tm.type = type;
@@ -146,21 +135,42 @@ void setup_ros_monitoring(AppData* ad) {
         }
     };
 
-    // Initial check
-    timer_cb();
+    // Only start bag monitoring if there are requested topics
+    if (!ad->ros_topics.empty()) {
+        // Initial check
+        timer_cb();
 
-    // Create timer (1s period)
-    auto timer = ad->node->create_wall_timer(std::chrono::seconds(1), timer_cb);
-    ad->timers.push_back(timer);
+        // Create timer (1s period)
+        auto timer = ad->node->create_wall_timer(std::chrono::seconds(1), timer_cb);
+        ad->timers.push_back(timer);
+    }
 
     // Subscribe to timestamps for unixfd sync (high reliability QoS)
-    const rclcpp::QoS timestamp_qos = rclcpp::QoS(rclcpp::KeepLast(100)).reliable();
-    ad->sub_unixfd_ts = ad->node->create_subscription<std_msgs::msg::Header>(
-        "unixfd_timestamps", timestamp_qos,
-        [ad](const std_msgs::msg::Header::SharedPtr msg) {
-            long long pts = (long long)msg->stamp.sec * 1000000000LL + msg->stamp.nanosec;
-            long long cpu_ts = std::stoll(msg->frame_id);
-            std::lock_guard<std::mutex> lock(ad->ts_map_mutex);
-            ad->pts_to_cpu_ts[pts] = cpu_ts;
-        });
+    const rclcpp::QoS timestamp_qos = rclcpp::QoS(rclcpp::KeepLast(200)).reliable();
+    for (auto* stream : ad->streams) {
+        std::string topic = stream->name + "/unixfd_timestamps";
+        auto sub = ad->node->create_subscription<std_msgs::msg::Header>(
+            topic, timestamp_qos,
+            [ad, stream](const std_msgs::msg::Header::SharedPtr msg) {
+                unsigned long long remote_offset =
+                    (static_cast<unsigned long long>(static_cast<uint32_t>(msg->stamp.sec)) << 32) |
+                    static_cast<unsigned long long>(msg->stamp.nanosec);
+                long long cpu_ts = std::stoll(msg->frame_id);
+                {
+                    std::lock_guard<std::mutex> lock(ad->offset_map_mutex);
+                    ad->offset_to_cpu_ts[static_cast<long long>(remote_offset)] = cpu_ts;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(stream->published_offset_mutex);
+                    stream->published_offset_to_cpu_ts[remote_offset] = cpu_ts;
+                }
+            });
+        stream->sub_unixfd_ts = sub;
+    }
+}
+
+void ros_node_spin_once(AppData* ad) {
+    if (ad && ad->node) {
+        rclcpp::spin_some(ad->node);
+    }
 }

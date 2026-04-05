@@ -21,6 +21,7 @@ void shutdown_pipeline(GstElement* pipeline);  // Send EOS, wait, set NULL, remo
 // GStreamer Callbacks
 void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, guint64 duration, gpointer user_data);
 GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
+GstPadProbeReturn remote_offset_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
 GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
 GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data);
 gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data);

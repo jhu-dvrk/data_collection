@@ -296,7 +296,7 @@ void MainWindow::finalize_session() {
         for (const auto &f : m_data->audio_stream->frames) {
             Json::Value frameNode;
             frameNode["cpu_ts"] = (Json::Value::Int64)f.cpu_ts;
-            frameNode["gst_ts"] = (Json::Value::Int64)f.gst_ts;
+                frameNode["gst_ts"] = (Json::Value::Int64)f.buffer_ts_ns;
             framesArr.append(frameNode);
         }
         root["frames"] = framesArr;
@@ -330,10 +330,23 @@ void MainWindow::finalize_session() {
             }
 
             Json::Value framesArr(Json::arrayValue);
-            for (const auto &f : s->frames) {
+            for (size_t i = 0; i < s->frames.size(); ++i) {
+                const auto &f = s->frames[i];
+                long long cpu_ts = f.cpu_ts;
+                if (cpu_ts == 0) {
+                    unsigned long long remote_offset = 0;
+                    if (i < s->frame_remote_offsets.size()) {
+                        remote_offset = s->frame_remote_offsets[i];
+                    }
+                    std::lock_guard<std::mutex> stream_lock(s->published_offset_mutex);
+                    auto it = s->published_offset_to_cpu_ts.find(remote_offset);
+                    if (it != s->published_offset_to_cpu_ts.end()) {
+                        cpu_ts = it->second;
+                    }
+                }
                 Json::Value frameNode;
-                frameNode["cpu_ts"] = (Json::Value::Int64)f.cpu_ts;
-                frameNode["gst_ts"] = (Json::Value::Int64)f.gst_ts;
+                frameNode["cpu_ts"] = (Json::Value::Int64)cpu_ts;
+                frameNode["gst_ts"] = (Json::Value::Int64)f.buffer_ts_ns;
                 framesArr.append(frameNode);
             }
             root["frames"] = framesArr;
@@ -476,6 +489,11 @@ void MainWindow::finalize_session() {
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())
             ->write(tagsRoot, &os);
     }
+}
+
+void MainWindow::start_ros_sync() {
+    // Only call this once after all VideoStreams are created
+    setup_ros_monitoring(m_data);
 }
 
 MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream *s) {

@@ -1,6 +1,7 @@
 #include "video_stream.hpp"
 #include "context.hpp"
 #include "gst_helpers.hpp"
+#include "ros_node.hpp"
 #include <iostream>
 #include <fstream>
 #include <algorithm>
@@ -14,7 +15,7 @@ VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), pre
                 is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0), estimated_latency(0.0),
                 width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                 rec_width(0), rec_height(0), rec_fps_requested(0.0),
-                total_offset_ns(0), last_raw_pts(-1), last_duration(0),
+                total_offset_ns(0), last_raw_buffer_ts(-1), last_duration(0),
                 last_fps_ts(0), fps_frame_counter(0),
                 m_ad(NULL) {}
 
@@ -87,9 +88,9 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
                 struct passwd* pw = getpwuid(getuid());
                 username = pw ? pw->pw_name : "unknown";
             }
-            socket_path = "/tmp/dvrk_display_" + std::string(username) + ".sock";
+            socket_path = "/tmp/" + v->name + "_" + std::string(username) + ".sock";
         }
-        source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=false ! videoconvert ! video/x-raw,format=NV12";
+        source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=false ! videoconvert ! video/x-raw,format=NV12 ! queue name=__remote_offset_q__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream";
     }
 
     if (source_stream.empty()) {
@@ -139,6 +140,16 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
             gst_object_unref(tpad);
         }
         gst_object_unref(tee);
+    }
+
+    GstElement *remote_offset_q = gst_bin_get_by_name(GST_BIN(this->pipeline), "__remote_offset_q__");
+    if (remote_offset_q) {
+        GstPad *rpad = gst_element_get_static_pad(remote_offset_q, "src");
+        if (rpad) {
+            gst_pad_add_probe(rpad, GST_PAD_PROBE_TYPE_BUFFER, remote_offset_probe_cb, this, NULL);
+            gst_object_unref(rpad);
+        }
+        gst_object_unref(remote_offset_q);
     }
 
     // Record queue overrun — counts dropped frames
@@ -206,6 +217,15 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
     }
     this->set_recording(false);
 
+    // Give ROS some time to receive remaining timestamp messages
+    // The publisher in dvrk_display has a queue, and network latency exists.
+    if (m_ad) {
+        for (int i = 0; i < 200; ++i) { // Spin for ~200ms
+             ros_node_spin_once(m_ad);
+             g_usleep(1000);
+        }
+    }
+
     if (this->record_enabled && !this->output_json.empty()) {
         Json::Value root;
         root["type"] = "dc::sidecar@1.0.0";
@@ -218,19 +238,24 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
         root["estimated_latency_ms"] = this->estimated_latency;
 
         Json::Value frame_list = Json::arrayValue;
-        for (auto& f : this->frames) {
-            // Late lookup for cpu_ts using pts
-            if (f.cpu_ts == 0 && m_ad) {
-                std::lock_guard<std::mutex> lock(m_ad->ts_map_mutex);
-                auto it = m_ad->pts_to_cpu_ts.find(f.gst_ts);
-                if (it != m_ad->pts_to_cpu_ts.end()) {
+        for (size_t i = 0; i < this->frames.size(); ++i) {
+            auto &f = this->frames[i];
+            // Late lookup for cpu_ts using REMOTE_OFFSET
+            if (f.cpu_ts == 0) {
+                unsigned long long remote_offset = 0;
+                if (i < this->frame_remote_offsets.size()) {
+                    remote_offset = this->frame_remote_offsets[i];
+                }
+                std::lock_guard<std::mutex> lock(this->published_offset_mutex);
+                auto it = this->published_offset_to_cpu_ts.find(remote_offset);
+                if (it != this->published_offset_to_cpu_ts.end()) {
                     f.cpu_ts = it->second;
                 }
             }
 
             Json::Value fv;
             fv["cpu_ns"] = (Json::Value::Int64)f.cpu_ts;
-            fv["gst_ns"] = (Json::Value::Int64)f.gst_ts;
+            fv["gst_ns"] = (Json::Value::Int64)f.buffer_ts_ns;
             frame_list.append(fv);
         }
         root["frames"] = frame_list;

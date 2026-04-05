@@ -6,7 +6,7 @@
 #include <algorithm>
 
 AudioStream::AudioStream() : pipeline(NULL), sink(NULL), valve(NULL), src(NULL),
-                is_recording(false), total_offset_ns(0), last_raw_pts(-1), last_duration(0), m_ad(NULL) {}
+                is_recording(false), total_offset_ns(0), last_raw_buffer_ts(-1), last_duration(0), m_ad(NULL) {}
 
 AudioStream::~AudioStream() {
     // Pipeline should already be shut down via shutdown()
@@ -100,7 +100,7 @@ void AudioStream::stop_and_save(const std::vector<std::string>& config_files) {
         for (const auto& f : this->frames) {
             Json::Value fv;
             fv["cpu_ns"] = (Json::Value::Int64)f.cpu_ts;
-            fv["gst_ns"] = (Json::Value::Int64)f.gst_ts;
+            fv["gst_ns"] = (Json::Value::Int64)f.buffer_ts_ns;
             alist.append(fv);
         }
         aroot["frames"] = alist;

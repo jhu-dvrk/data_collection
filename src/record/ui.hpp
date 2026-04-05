@@ -21,6 +21,7 @@ public:
     // properly finalize GStreamer pipelines and write all session metadata.
     // Safe to call multiple times (idempotent).
     void finalize_session();
+    void start_ros_sync();
 
 protected:
     // Signal handlers

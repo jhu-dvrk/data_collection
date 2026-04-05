@@ -8,6 +8,65 @@
 
 extern int app_max_threads;
 
+namespace {
+
+typedef struct _RemoteOffsetMeta {
+    GstMeta meta;
+    guint64 remote_offset;
+} RemoteOffsetMeta;
+
+GType remote_offset_meta_api_get_type(void) {
+    static GType type = 0;
+    static const gchar *tags[] = {"remote_offset", nullptr};
+    if (g_once_init_enter(&type)) {
+        GType new_type = gst_meta_api_type_register("RemoteOffsetMetaAPI", tags);
+        g_once_init_leave(&type, new_type);
+    }
+    return type;
+}
+
+const GstMetaInfo *remote_offset_meta_get_info(void) {
+    static const GstMetaInfo *meta_info = nullptr;
+    if (g_once_init_enter(&meta_info)) {
+        const GstMetaInfo *new_meta_info = gst_meta_register(
+            remote_offset_meta_api_get_type(), "RemoteOffsetMeta",
+            sizeof(RemoteOffsetMeta),
+            [](GstMeta *meta, gpointer, GstBuffer *) -> gboolean {
+                reinterpret_cast<RemoteOffsetMeta *>(meta)->remote_offset = GST_BUFFER_OFFSET_NONE;
+                return TRUE;
+            },
+            [](GstMeta *, GstBuffer *) -> void {},
+            [](GstBuffer *dest, GstMeta *meta, GstBuffer *, GQuark, gpointer) -> gboolean {
+                const auto *src_meta = reinterpret_cast<RemoteOffsetMeta *>(meta);
+                auto *dest_meta = reinterpret_cast<RemoteOffsetMeta *>(
+                    gst_buffer_add_meta(dest, remote_offset_meta_get_info(), nullptr));
+                if (dest_meta == nullptr) {
+                    return FALSE;
+                }
+                dest_meta->remote_offset = src_meta->remote_offset;
+                return TRUE;
+            });
+        g_once_init_leave(&meta_info, new_meta_info);
+    }
+    return meta_info;
+}
+
+RemoteOffsetMeta *gst_buffer_add_remote_offset_meta(GstBuffer *buffer, guint64 remote_offset) {
+    auto *meta = reinterpret_cast<RemoteOffsetMeta *>(
+        gst_buffer_add_meta(buffer, remote_offset_meta_get_info(), nullptr));
+    if (meta != nullptr) {
+        meta->remote_offset = remote_offset;
+    }
+    return meta;
+}
+
+RemoteOffsetMeta *gst_buffer_get_remote_offset_meta(GstBuffer *buffer) {
+    return reinterpret_cast<RemoteOffsetMeta *>(
+        gst_buffer_get_meta(buffer, remote_offset_meta_api_get_type()));
+}
+
+} // namespace
+
 void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, guint64 duration, gpointer user_data) {
     (void)overlay; (void)timestamp; (void)duration;
     VideoStream *s = (VideoStream *)user_data;
@@ -130,6 +189,22 @@ GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer u
     return GST_PAD_PROBE_OK;
 }
 
+GstPadProbeReturn remote_offset_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
+    (void)pad;
+    (void)user_data;
+    if (info->type & GST_PAD_PROBE_TYPE_BUFFER) {
+        GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+        if (!gst_buffer_is_writable(buf)) {
+            buf = gst_buffer_make_writable(buf);
+            GST_PAD_PROBE_INFO_DATA(info) = buf;
+        }
+        if (GST_BUFFER_OFFSET_IS_VALID(buf)) {
+            gst_buffer_add_remote_offset_meta(buf, GST_BUFFER_OFFSET(buf));
+        }
+    }
+    return GST_PAD_PROBE_OK;
+}
+
 GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
     (void)pad;
     AudioStream *as = (AudioStream *)user_data;
@@ -139,10 +214,10 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
              buf = gst_buffer_make_writable(buf);
              GST_PAD_PROBE_INFO_DATA(info) = buf;
         }
-        long long pts = (long long)GST_BUFFER_PTS(buf);
-        if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
-        if (as->last_raw_pts != -1) {
-            long long delta = pts - as->last_raw_pts;
+        long long buffer_ts = (long long)GST_BUFFER_PTS(buf);
+        if (!GST_CLOCK_TIME_IS_VALID(buffer_ts)) return GST_PAD_PROBE_OK;
+        if (as->last_raw_buffer_ts != -1) {
+            long long delta = buffer_ts - as->last_raw_buffer_ts;
             if (delta > 500 * 1000000LL) {
                  long long expected_gap = as->last_duration;
                  if (!GST_CLOCK_TIME_IS_VALID(expected_gap) || expected_gap == 0) expected_gap = 20 * 1000000LL;
@@ -150,13 +225,13 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
                  if (gap > 0) as->total_offset_ns += gap;
             }
         }
-        // Capture original PTS
-        long long gst_ts = pts;
+        // Capture original buffer timestamp
+        long long buffer_ts_ns = buffer_ts;
 
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-        as->frames.push_back({cpu_ts, gst_ts});
+        as->frames.push_back({cpu_ts, buffer_ts_ns});
     }
     return GST_PAD_PROBE_OK;
 }
@@ -170,12 +245,11 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
              buf = gst_buffer_make_writable(buf);
              GST_PAD_PROBE_INFO_DATA(info) = buf;
         }
-        long long pts = (long long)GST_BUFFER_PTS(buf);
-        if (!GST_CLOCK_TIME_IS_VALID(pts)) return GST_PAD_PROBE_OK;
-
+        long long buffer_ts = (long long)GST_BUFFER_PTS(buf);
+        if (!GST_CLOCK_TIME_IS_VALID(buffer_ts)) return GST_PAD_PROBE_OK;
         // Debug: Log the jump if it is significant
-        if (s->last_raw_pts != -1) {
-            long long delta = pts - s->last_raw_pts;
+        if (s->last_raw_buffer_ts != -1) {
+            long long delta = buffer_ts - s->last_raw_buffer_ts;
             if (delta > 500 * 1000000LL) { // 500ms threshold for offset correction
                  long long expected_gap = s->last_duration;
                  if (!GST_CLOCK_TIME_IS_VALID(expected_gap) || expected_gap == 0) expected_gap = 33333333LL;
@@ -183,10 +257,17 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
                  if (gap > 0) s->total_offset_ns += gap;
             }
         }
-        // Capture original PTS
-        long long gst_ts = pts;
+        // Capture original buffer timestamp
+        long long buffer_ts_ns = buffer_ts;
+        unsigned long long remote_offset = 0;
+        if (auto *meta = gst_buffer_get_remote_offset_meta(buf)) {
+            if (meta->remote_offset != GST_BUFFER_OFFSET_NONE) {
+                remote_offset = meta->remote_offset;
+            }
+        }
 
-        s->frames.push_back({0, gst_ts}); // cpu_ts = 0 for now, will be mapped later
+        s->frames.push_back({0, buffer_ts_ns}); // cpu_ts = 0 for now, will be mapped later
+        s->frame_remote_offsets.push_back(remote_offset);
         s->frames_recorded++;
 
         long long now = g_get_monotonic_time();

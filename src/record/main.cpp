@@ -209,6 +209,12 @@ int main(int argc, char *argv[]) {
 
     // Run Main Loop
     // start_ui_update_loop(&data); // Replaced by MainWindow timer
+    // window.start_ros_sync(); // Moved above signal handlers
+    g_unix_signal_add(SIGINT, on_sigint, &data);
+
+    window.start_ros_sync();
+
+    // Run Main Loop
     Gtk::Main::run(window);
 
     // Finalize GStreamer pipelines and write session metadata FIRST, while

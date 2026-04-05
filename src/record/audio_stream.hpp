@@ -25,7 +25,7 @@ public:
     std::string output_audio, output_json;
     std::vector<FrameData> frames;
     bool is_recording;
-    long long total_offset_ns, last_raw_pts, last_duration;
+    long long total_offset_ns, last_raw_buffer_ts, last_duration;
 
 private:
     AppData* m_ad;
