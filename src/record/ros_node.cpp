@@ -46,7 +46,8 @@ void open_bag_writer(AppData* ad, const std::string& path) {
         ad->bag_messages_recorded = 0;
 
         auto topic_names_and_types = ad->node->get_topic_names_and_types();
-        for (const auto& topic : ad->subscribed_topics) {
+        for (const auto& topic_cfg : ad->ros_topics) {
+             std::string topic = topic_cfg.name;
              if (topic_names_and_types.count(topic)) {
                  std::string type = topic_names_and_types[topic][0];
                  rosbag2_storage::TopicMetadata tm;
@@ -90,23 +91,26 @@ void setup_ros_monitoring(AppData* ad) {
              // We can check how many requested topics we found
              int found = 0;
              for (const auto& t : ad->ros_topics) {
-                 if (topic_names_and_types.count(t) > 0) found++;
+                 if (topic_names_and_types.count(t.name) > 0) found++;
              }
              ad->bag_topics_found = found;
         }
 
         std::lock_guard<std::mutex> lock(ad->data_mutex);
 
-        for (const auto& topic : ad->ros_topics) {
+        for (const auto& topic_cfg : ad->ros_topics) {
+            std::string topic = topic_cfg.name;
+            bool is_continuous = topic_cfg.continuous;
+
             if (ad->subscribed_topics.count(topic)) continue;
 
             if (topic_names_and_types.count(topic)) {
                 std::string type = topic_names_and_types[topic][0];
                 // Removed print found topic
 
-                auto callback = [ad, topic, type](std::shared_ptr<rclcpp::SerializedMessage> msg) {
+                auto callback = [ad, topic, type, is_continuous](std::shared_ptr<rclcpp::SerializedMessage> msg) {
                     std::lock_guard<std::mutex> lock(ad->data_mutex);
-                    if (ad->global_recording && ad->bag_writer) {
+                    if ((ad->global_recording || (is_continuous && ad->any_recording_started)) && ad->bag_writer) {
                         try {
                              rosbag2_storage::TopicMetadata tm;
                              tm.name = topic;
@@ -143,29 +147,6 @@ void setup_ros_monitoring(AppData* ad) {
         // Create timer (1s period)
         auto timer = ad->node->create_wall_timer(std::chrono::seconds(1), timer_cb);
         ad->timers.push_back(timer);
-    }
-
-    // Subscribe to timestamps for unixfd sync (high reliability QoS)
-    const rclcpp::QoS timestamp_qos = rclcpp::QoS(rclcpp::KeepLast(200)).reliable();
-    for (auto* stream : ad->streams) {
-        std::string topic = stream->name + "/unixfd_timestamps";
-        auto sub = ad->node->create_subscription<std_msgs::msg::Header>(
-            topic, timestamp_qos,
-            [ad, stream](const std_msgs::msg::Header::SharedPtr msg) {
-                unsigned long long remote_offset =
-                    (static_cast<unsigned long long>(static_cast<uint32_t>(msg->stamp.sec)) << 32) |
-                    static_cast<unsigned long long>(msg->stamp.nanosec);
-                long long cpu_ts = std::stoll(msg->frame_id);
-                {
-                    std::lock_guard<std::mutex> lock(ad->offset_map_mutex);
-                    ad->offset_to_cpu_ts[static_cast<long long>(remote_offset)] = cpu_ts;
-                }
-                {
-                    std::lock_guard<std::mutex> lock(stream->published_offset_mutex);
-                    stream->published_offset_to_cpu_ts[remote_offset] = cpu_ts;
-                }
-            });
-        stream->sub_unixfd_ts = sub;
     }
 }
 

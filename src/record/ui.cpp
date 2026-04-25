@@ -333,17 +333,7 @@ void MainWindow::finalize_session() {
             for (size_t i = 0; i < s->frames.size(); ++i) {
                 const auto &f = s->frames[i];
                 long long cpu_ts = f.cpu_ts;
-                if (cpu_ts == 0) {
-                    unsigned long long remote_offset = 0;
-                    if (i < s->frame_remote_offsets.size()) {
-                        remote_offset = s->frame_remote_offsets[i];
-                    }
-                    std::lock_guard<std::mutex> stream_lock(s->published_offset_mutex);
-                    auto it = s->published_offset_to_cpu_ts.find(remote_offset);
-                    if (it != s->published_offset_to_cpu_ts.end()) {
-                        cpu_ts = it->second;
-                    }
-                }
+
                 Json::Value frameNode;
                 frameNode["cpu_ts"] = (Json::Value::Int64)cpu_ts;
                 frameNode["gst_ts"] = (Json::Value::Int64)f.buffer_ts_ns;
@@ -595,13 +585,16 @@ void MainWindow::on_bag_details_clicked() {
         std::lock_guard<std::mutex> lock(m_data->data_mutex);
         ss << "<b>Subscribed Topics (" << m_data->bag_topics_found << "/"
            << m_data->ros_topics.size() << "):</b>\n";
-        for (const auto &topic : m_data->ros_topics) {
+        for (const auto &topic_cfg : m_data->ros_topics) {
+            std::string topic = topic_cfg.name;
             bool found = m_data->subscribed_topics.count(topic);
-            if (found) {
-                ss << "<span foreground='green'>✔ " << topic << "</span>\n";
-            } else {
-                ss << "<span foreground='red'>✘ " << topic << "</span>\n";
+            std::string status = found ? "<span foreground='green'>✔</span> "
+                                       : "<span foreground='red'>✘</span> ";
+            ss << status << topic;
+            if (topic_cfg.continuous) {
+                ss << " <small><i>(continuous)</i></small>";
             }
+            ss << "\n";
         }
     }
 

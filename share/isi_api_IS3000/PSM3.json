@@ -1,8 +1,17 @@
 {
   "type": "dc::config@1.0.0",
   "ros_topics": [
-    "/PSM3/measured_js",
-    "/PSM3/measured_cp",
-    "/PSM3/jaw/measured_js"
+    {
+      "name": "/PSM3/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/PSM3/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/PSM3/jaw/measured_js",
+      "continuous": true
+    }
   ]
 }

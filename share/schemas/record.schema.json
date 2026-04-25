@@ -23,9 +23,21 @@
     "ros_topics": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The ROS 2 topic name"
+          },
+          "continuous": {
+            "type": "boolean",
+            "description": "If true, data for this topic is collected continuously once the first recording session is started by the user. If false, it is only collected when video recording is active.",
+            "default": false
+          }
+        }
       },
-      "description": "List of ROS 2 topics to record in a rosbag alongside the video files"
+      "description": "List of ROS 2 topics to record in a rosbag"
     },
     "stages": {
       "type": "array",

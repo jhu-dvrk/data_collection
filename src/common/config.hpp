@@ -29,13 +29,18 @@ struct VideoConfig {
     double estimated_latency = 0.0;
 };
 
+struct RosTopicConfig {
+    std::string name;
+    bool continuous = false;
+};
+
 struct AppConfig {
     std::string data_directory = ".";
     bool record_audio = false;
     std::vector<VideoConfig> videos;
     std::vector<std::string> stages;
     std::vector<std::string> tags;
-    std::vector<std::string> ros_topics;
+    std::vector<RosTopicConfig> ros_topics;
     std::vector<std::string> configuration_files;
 };
 

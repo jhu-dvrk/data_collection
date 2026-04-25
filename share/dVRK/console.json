@@ -1,14 +1,41 @@
 {
   "type": "dc::config@1.0.0",
   "ros_topics": [
-    "/console/camera",
-    "/console/camera_quick_tap",
-    "/console/clutch",
-    "/console/clutch_quick_tap",
-    "/console/follow_mode",
-    "/console/head_in",
-    "/console/head_out",
-    "/console/masters_as_mice",
-    "/console/operator_present"
+    {
+      "name": "/console/camera",
+      "continuous": true
+    },
+    {
+      "name": "/console/camera_quick_tap",
+      "continuous": true
+    },
+    {
+      "name": "/console/clutch",
+      "continuous": true
+    },
+    {
+      "name": "/console/clutch_quick_tap",
+      "continuous": true
+    },
+    {
+      "name": "/console/follow_mode",
+      "continuous": true
+    },
+    {
+      "name": "/console/head_in",
+      "continuous": true
+    },
+    {
+      "name": "/console/head_out",
+      "continuous": true
+    },
+    {
+      "name": "/console/masters_as_mice",
+      "continuous": true
+    },
+    {
+      "name": "/console/operator_present",
+      "continuous": true
+    }
   ]
 }

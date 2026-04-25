@@ -5,67 +5,9 @@
 
 #include <iostream>
 #include <gst/video/video.h>
+#include "../common/cpu_timestamp_meta.hpp"
 
 extern int app_max_threads;
-
-namespace {
-
-typedef struct _RemoteOffsetMeta {
-    GstMeta meta;
-    guint64 remote_offset;
-} RemoteOffsetMeta;
-
-GType remote_offset_meta_api_get_type(void) {
-    static GType type = 0;
-    static const gchar *tags[] = {"remote_offset", nullptr};
-    if (g_once_init_enter(&type)) {
-        GType new_type = gst_meta_api_type_register("RemoteOffsetMetaAPI", tags);
-        g_once_init_leave(&type, new_type);
-    }
-    return type;
-}
-
-const GstMetaInfo *remote_offset_meta_get_info(void) {
-    static const GstMetaInfo *meta_info = nullptr;
-    if (g_once_init_enter(&meta_info)) {
-        const GstMetaInfo *new_meta_info = gst_meta_register(
-            remote_offset_meta_api_get_type(), "RemoteOffsetMeta",
-            sizeof(RemoteOffsetMeta),
-            [](GstMeta *meta, gpointer, GstBuffer *) -> gboolean {
-                reinterpret_cast<RemoteOffsetMeta *>(meta)->remote_offset = GST_BUFFER_OFFSET_NONE;
-                return TRUE;
-            },
-            [](GstMeta *, GstBuffer *) -> void {},
-            [](GstBuffer *dest, GstMeta *meta, GstBuffer *, GQuark, gpointer) -> gboolean {
-                const auto *src_meta = reinterpret_cast<RemoteOffsetMeta *>(meta);
-                auto *dest_meta = reinterpret_cast<RemoteOffsetMeta *>(
-                    gst_buffer_add_meta(dest, remote_offset_meta_get_info(), nullptr));
-                if (dest_meta == nullptr) {
-                    return FALSE;
-                }
-                dest_meta->remote_offset = src_meta->remote_offset;
-                return TRUE;
-            });
-        g_once_init_leave(&meta_info, new_meta_info);
-    }
-    return meta_info;
-}
-
-RemoteOffsetMeta *gst_buffer_add_remote_offset_meta(GstBuffer *buffer, guint64 remote_offset) {
-    auto *meta = reinterpret_cast<RemoteOffsetMeta *>(
-        gst_buffer_add_meta(buffer, remote_offset_meta_get_info(), nullptr));
-    if (meta != nullptr) {
-        meta->remote_offset = remote_offset;
-    }
-    return meta;
-}
-
-RemoteOffsetMeta *gst_buffer_get_remote_offset_meta(GstBuffer *buffer) {
-    return reinterpret_cast<RemoteOffsetMeta *>(
-        gst_buffer_get_meta(buffer, remote_offset_meta_api_get_type()));
-}
-
-} // namespace
 
 void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, guint64 duration, gpointer user_data) {
     (void)overlay; (void)timestamp; (void)duration;
@@ -189,21 +131,7 @@ GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer u
     return GST_PAD_PROBE_OK;
 }
 
-GstPadProbeReturn remote_offset_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
-    (void)pad;
-    (void)user_data;
-    if (info->type & GST_PAD_PROBE_TYPE_BUFFER) {
-        GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
-        if (!gst_buffer_is_writable(buf)) {
-            buf = gst_buffer_make_writable(buf);
-            GST_PAD_PROBE_INFO_DATA(info) = buf;
-        }
-        if (GST_BUFFER_OFFSET_IS_VALID(buf)) {
-            gst_buffer_add_remote_offset_meta(buf, GST_BUFFER_OFFSET(buf));
-        }
-    }
-    return GST_PAD_PROBE_OK;
-}
+
 
 GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
     (void)pad;
@@ -259,15 +187,19 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
         }
         // Capture original buffer timestamp
         long long buffer_ts_ns = buffer_ts;
-        unsigned long long remote_offset = 0;
-        if (auto *meta = gst_buffer_get_remote_offset_meta(buf)) {
-            if (meta->remote_offset != GST_BUFFER_OFFSET_NONE) {
-                remote_offset = meta->remote_offset;
-            }
+        // Try to get the CPU timestamp from the sender (e.g. stereo display)
+        gint64 sender_cpu_ts = dc_buffer_get_cpu_timestamp(buf);
+        long long cpu_ts;
+        if (sender_cpu_ts != 0) {
+            cpu_ts = static_cast<long long>(sender_cpu_ts);
+        } else {
+            // Fallback: capture locally (for non-unixfd sources)
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
         }
 
-        s->frames.push_back({0, buffer_ts_ns}); // cpu_ts = 0 for now, will be mapped later
-        s->frame_remote_offsets.push_back(remote_offset);
+        s->frames.push_back({cpu_ts, buffer_ts_ns});
         s->frames_recorded++;
 
         long long now = g_get_monotonic_time();

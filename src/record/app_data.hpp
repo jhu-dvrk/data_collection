@@ -12,6 +12,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include "config.hpp"
 
 extern int app_max_threads;
 
@@ -62,7 +63,7 @@ struct AppData {
 
     // ROS Bag members
     std::string session_bag_path;
-    std::vector<std::string> ros_topics;
+    std::vector<dc::RosTopicConfig> ros_topics;
     std::unique_ptr<rosbag2_cpp::Writer> bag_writer;
     std::vector<std::shared_ptr<rclcpp::GenericSubscription>> bag_subs;
     std::set<std::string> subscribed_topics;
@@ -76,8 +77,6 @@ struct AppData {
     bool explicit_stages;
 
     std::mutex data_mutex;
-    std::mutex offset_map_mutex;
-    std::map<long long, long long> offset_to_cpu_ts;
 
     AppData();
     ~AppData();

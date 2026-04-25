@@ -1,7 +1,13 @@
 {
   "type": "dc::config@1.0.0",
   "ros_topics": [
-    "/ECM1/measured_js",
-    "/ECM1/measured_cp"
+    {
+      "name": "/ECM1/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/ECM1/measured_cp",
+      "continuous": true
+    }
   ]
 }

@@ -1,8 +1,17 @@
 {
   "type": "dc::config@1.0.0",
   "ros_topics": [
-    "/MTML1/measured_js",
-    "/MTML1/measured_cp",
-    "/MTML1/gripper/measured_js"
+    {
+      "name": "/MTML1/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/MTML1/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/MTML1/gripper/measured_js",
+      "continuous": true
+    }
   ]
 }

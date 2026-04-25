@@ -142,15 +142,7 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
         gst_object_unref(tee);
     }
 
-    GstElement *remote_offset_q = gst_bin_get_by_name(GST_BIN(this->pipeline), "__remote_offset_q__");
-    if (remote_offset_q) {
-        GstPad *rpad = gst_element_get_static_pad(remote_offset_q, "src");
-        if (rpad) {
-            gst_pad_add_probe(rpad, GST_PAD_PROBE_TYPE_BUFFER, remote_offset_probe_cb, this, NULL);
-            gst_object_unref(rpad);
-        }
-        gst_object_unref(remote_offset_q);
-    }
+
 
     // Record queue overrun — counts dropped frames
     GstElement *qrec = gst_bin_get_by_name(GST_BIN(this->pipeline), "__rec_q_rec__");
@@ -217,14 +209,6 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
     }
     this->set_recording(false);
 
-    // Give ROS some time to receive remaining timestamp messages
-    // The publisher in dvrk_display has a queue, and network latency exists.
-    if (m_ad) {
-        for (int i = 0; i < 200; ++i) { // Spin for ~200ms
-             ros_node_spin_once(m_ad);
-             g_usleep(1000);
-        }
-    }
 
     if (this->record_enabled && !this->output_json.empty()) {
         Json::Value root;
@@ -240,19 +224,6 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
         Json::Value frame_list = Json::arrayValue;
         for (size_t i = 0; i < this->frames.size(); ++i) {
             auto &f = this->frames[i];
-            // Late lookup for cpu_ts using REMOTE_OFFSET
-            if (f.cpu_ts == 0) {
-                unsigned long long remote_offset = 0;
-                if (i < this->frame_remote_offsets.size()) {
-                    remote_offset = this->frame_remote_offsets[i];
-                }
-                std::lock_guard<std::mutex> lock(this->published_offset_mutex);
-                auto it = this->published_offset_to_cpu_ts.find(remote_offset);
-                if (it != this->published_offset_to_cpu_ts.end()) {
-                    f.cpu_ts = it->second;
-                }
-            }
-
             Json::Value fv;
             fv["cpu_ns"] = (Json::Value::Int64)f.cpu_ts;
             fv["gst_ns"] = (Json::Value::Int64)f.buffer_ts_ns;

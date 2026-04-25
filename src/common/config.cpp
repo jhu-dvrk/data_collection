@@ -104,7 +104,14 @@ AppConfig Config::parse_app_config(const Json::Value& root) {
         for (const auto& t : root["tags"]) cfg.tags.push_back(t.asString());
     }
     if (root.isMember("ros_topics")) {
-        for (const auto& t : root["ros_topics"]) cfg.ros_topics.push_back(t.asString());
+        for (const auto& t : root["ros_topics"]) {
+            if (t.isObject()) {
+                RosTopicConfig rtc;
+                rtc.name = t.get("name", "").asString();
+                rtc.continuous = t.get("continuous", false).asBool();
+                cfg.ros_topics.push_back(rtc);
+            }
+        }
     }
     if (root.isMember("configuration_files")) {
         for (const auto& f : root["configuration_files"]) cfg.configuration_files.push_back(f.asString());

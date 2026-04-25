@@ -33,7 +33,6 @@ public:
     std::string output_video, output_json;
     std::string pipeline_desc;
     std::vector<FrameData> frames;
-    std::vector<unsigned long long> frame_remote_offsets;
     bool is_recording, record_enabled;
     long long frames_recorded, frames_dropped;
     long long last_run_frames_recorded;
@@ -51,11 +50,6 @@ public:
 
     // Stitching / Gapless
     long long total_offset_ns, last_raw_buffer_ts, last_duration;
-
-    // UnixFD timestamp correlation
-    std::shared_ptr<rclcpp::Subscription<std_msgs::msg::Header>> sub_unixfd_ts;
-    std::map<unsigned long long, long long> published_offset_to_cpu_ts;
-    std::mutex published_offset_mutex;
 
     // FPS Calculation
     long long last_fps_ts, fps_frame_counter;

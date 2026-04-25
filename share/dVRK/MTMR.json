@@ -1,12 +1,33 @@
 {
   "type": "dc::config@1.0.0",
   "ros_topics": [
-    "/MTMR/measured_cp",
-    "/MTMR/measured_cv",
-    "/MTMR/setpoint_cp",
-    "/MTMR/gripper/measured_js",
-    "/MTMR/gripper/setpoint_js",
-    "/MTMR/local/measured_cp",
-    "/MTMR/local/measured_cv"
+    {
+      "name": "/MTMR/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/MTMR/measured_cv",
+      "continuous": true
+    },
+    {
+      "name": "/MTMR/setpoint_cp",
+      "continuous": true
+    },
+    {
+      "name": "/MTMR/gripper/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/MTMR/gripper/setpoint_js",
+      "continuous": true
+    },
+    {
+      "name": "/MTMR/local/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/MTMR/local/measured_cv",
+      "continuous": true
+    }
   ]
 }

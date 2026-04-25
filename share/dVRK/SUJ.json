@@ -1,18 +1,57 @@
 {
   "type": "dc::config@1.0.0",
   "ros_topics": [
-    "/SUJ/joint_states",
-    "/SUJ/PSM1/measured_js",
-    "/SUJ/PSM1/measured_cp",
-    "/SUJ/PSM1/local/measured_cp",
-    "/SUJ/PSM2/measured_js",
-    "/SUJ/PSM2/measured_cp",
-    "/SUJ/PSM2/local/measured_cp",
-    "/SUJ/PSM3/measured_js",
-    "/SUJ/PSM3/measured_cp",
-    "/SUJ/PSM3/local/measured_cp",
-    "/SUJ/ECM/measured_js",
-    "/SUJ/ECM/measured_cp",
-    "/SUJ/ECM/local/measured_cp"
+    {
+      "name": "/SUJ/joint_states",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM1/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM1/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM1/local/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM2/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM2/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM2/local/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM3/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM3/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/PSM3/local/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/ECM/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/ECM/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/SUJ/ECM/local/measured_cp",
+      "continuous": true
+    }
   ]
 }

@@ -23,7 +23,7 @@
 #include "ui.hpp"
 #include "ros_node.hpp"
 #include "config.hpp"
-
+#include "../common/cpu_timestamp_meta.hpp"
 
 // Signal handler for Ctrl+C
 static gboolean on_sigint(gpointer user_data) {
@@ -40,6 +40,9 @@ int main(int argc, char *argv[]) {
 
     // Initialize GStreamer first (strips GST args)
     gst_init(&argc, &argv);
+
+    // Register custom metadata so unixfdsrc can deserialize it
+    dc_cpu_timestamp_meta_register();
 
     // Initialize Gtkmm (strips GTK args)
     Gtk::Main kit(argc, argv);
@@ -155,10 +158,10 @@ int main(int argc, char *argv[]) {
     // Deduplicate ROS topics while preserving first-seen order
     if (!data.ros_topics.empty()) {
         std::unordered_set<std::string> seen;
-        std::vector<std::string> deduped;
+        std::vector<dc::RosTopicConfig> deduped;
         deduped.reserve(data.ros_topics.size());
         for (const auto& topic : data.ros_topics) {
-            if (seen.insert(topic).second) deduped.push_back(topic);
+            if (seen.insert(topic.name).second) deduped.push_back(topic);
         }
         data.ros_topics.swap(deduped);
     }

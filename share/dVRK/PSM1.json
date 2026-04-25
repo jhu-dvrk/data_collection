@@ -1,12 +1,33 @@
 {
   "type": "dc::config@1.0.0",
   "ros_topics": [
-    "/PSM1/measured_cp",
-    "/PSM1/measured_cv",
-    "/PSM1/setpoint_cp",
-    "/PSM1/jaw/measured_js",
-    "/PSM1/jaw/setpoint_js",
-    "/PSM1/local/measured_cp",
-    "/PSM1/local/measured_cv"
+    {
+      "name": "/PSM1/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/PSM1/measured_cv",
+      "continuous": true
+    },
+    {
+      "name": "/PSM1/setpoint_cp",
+      "continuous": true
+    },
+    {
+      "name": "/PSM1/jaw/measured_js",
+      "continuous": true
+    },
+    {
+      "name": "/PSM1/jaw/setpoint_js",
+      "continuous": true
+    },
+    {
+      "name": "/PSM1/local/measured_cp",
+      "continuous": true
+    },
+    {
+      "name": "/PSM1/local/measured_cv",
+      "continuous": true
+    }
   ]
 }

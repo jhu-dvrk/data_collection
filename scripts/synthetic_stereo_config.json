@@ -1,0 +1,19 @@
+{
+  "type": "dd::display_config@1.0.0",
+  "name": "synthetic_stereo",
+  "ros_image_publishers": [
+    "stereo"
+  ],
+  "dvrk_console_namespace": "console",
+  "original_width": 1920,
+  "original_height": 1080,
+  "crop_width": 1920,
+  "crop_height": 1080,
+  "horizontal_shift_px": 0,
+  "vertical_shift_px": 0,
+  "sinks": [
+    "glimage"
+  ],
+  "left_stream": "shmsrc socket-path=/tmp/dvrk_left.sock ! video/x-raw,format=BGR,width=1920,height=1080,framerate=60/1 ! videoconvert ! video/x-raw,format=I420",
+  "right_stream": "shmsrc socket-path=/tmp/dvrk_right.sock ! video/x-raw,format=BGR,width=1920,height=1080,framerate=60/1 ! videoconvert ! video/x-raw,format=I420"
+}

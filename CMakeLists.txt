@@ -155,5 +155,14 @@ install(DIRECTORY share/
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Install common headers for dependent packages
+install(FILES
+  src/common/cpu_timestamp_meta.hpp
+  DESTINATION include/${PROJECT_NAME}
+)
+
+# Export include directories for downstream packages
+ament_export_include_directories(include)
+
 # Resource index
 ament_package()
