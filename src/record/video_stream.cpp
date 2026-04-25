@@ -13,6 +13,7 @@ extern int app_max_threads;
 
 VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL),
                 is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0), estimated_latency(0.0),
+                cpu_ts_from_unixfd_count(0), cpu_ts_at_reception_count(0),
                 width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                 rec_width(0), rec_height(0), rec_fps_requested(0.0),
                 total_offset_ns(0), last_raw_buffer_ts(-1), last_duration(0),
@@ -216,6 +217,11 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
         root["stream_name"] = this->name;
         root["start_timestamp_ns"] = this->frames.empty() ? 0 : (Json::Value::Int64)this->frames.front().cpu_ts;
         root["end_timestamp_ns"] = this->frames.empty() ? 0 : (Json::Value::Int64)this->frames.back().cpu_ts;
+
+        Json::Value cpuTsObj(Json::objectValue);
+        cpuTsObj["from_unixfd"] = (Json::Value::Int64)this->cpu_ts_from_unixfd_count;
+        cpuTsObj["at_reception"] = (Json::Value::Int64)this->cpu_ts_at_reception_count;
+        root["cpu_ts"] = cpuTsObj;
         root["frames_recorded"] = (int)this->frames_recorded;
         root["frames_dropped"] = (int)this->frames_dropped;
         root["side_by_side"] = this->side_by_side;

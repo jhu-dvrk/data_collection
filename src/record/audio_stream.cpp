@@ -6,7 +6,8 @@
 #include <algorithm>
 
 AudioStream::AudioStream() : pipeline(NULL), sink(NULL), valve(NULL), src(NULL),
-                is_recording(false), total_offset_ns(0), last_raw_buffer_ts(-1), last_duration(0), m_ad(NULL) {}
+                is_recording(false), total_offset_ns(0), last_raw_buffer_ts(-1), last_duration(0),
+                cpu_ts_from_unixfd_count(0), cpu_ts_at_reception_count(0), m_ad(NULL) {}
 
 AudioStream::~AudioStream() {
     // Pipeline should already be shut down via shutdown()
@@ -95,6 +96,11 @@ void AudioStream::stop_and_save(const std::vector<std::string>& config_files) {
         aroot["stream_name"] = "audio";
         aroot["start_timestamp_ns"] = this->frames.empty() ? 0 : (Json::Value::Int64)this->frames.front().cpu_ts;
         aroot["end_timestamp_ns"] = this->frames.empty() ? 0 : (Json::Value::Int64)this->frames.back().cpu_ts;
+
+        Json::Value cpuTsObj(Json::objectValue);
+        cpuTsObj["from_unixfd"] = (Json::Value::Int64)this->cpu_ts_from_unixfd_count;
+        cpuTsObj["at_reception"] = (Json::Value::Int64)this->cpu_ts_at_reception_count;
+        aroot["cpu_ts"] = cpuTsObj;
 
         Json::Value alist = Json::arrayValue;
         for (const auto& f : this->frames) {

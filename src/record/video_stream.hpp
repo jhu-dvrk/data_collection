@@ -38,6 +38,7 @@ public:
     long long last_run_frames_recorded;
     std::string last_run_stage_name;
     double current_fps, estimated_latency;
+    long long cpu_ts_from_unixfd_count, cpu_ts_at_reception_count;
 
     // Source Stats
     int width, height;

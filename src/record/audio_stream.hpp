@@ -26,6 +26,7 @@ public:
     std::vector<FrameData> frames;
     bool is_recording;
     long long total_offset_ns, last_raw_buffer_ts, last_duration;
+    long long cpu_ts_from_unixfd_count, cpu_ts_at_reception_count;
 
 private:
     AppData* m_ad;

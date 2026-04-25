@@ -287,6 +287,11 @@ void MainWindow::finalize_session() {
         root["audio_file"] = "audio.wav";
         root["gstreamer_pipeline"] = m_data->audio_stream->pipeline_desc;
 
+        Json::Value cpuTsObj(Json::objectValue);
+        cpuTsObj["from_unixfd"] = (Json::Value::Int64)m_data->audio_stream->cpu_ts_from_unixfd_count;
+        cpuTsObj["at_reception"] = (Json::Value::Int64)m_data->audio_stream->cpu_ts_at_reception_count;
+        root["cpu_ts"] = cpuTsObj;
+
         Json::Value configFiles(Json::arrayValue);
         for (const auto &f : m_data->config_files)
             configFiles.append(f);
@@ -314,6 +319,11 @@ void MainWindow::finalize_session() {
             root["video_file"] =
                 s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
             root["gstreamer_pipeline"] = s->pipeline_desc;
+
+            Json::Value cpuTsObj(Json::objectValue);
+            cpuTsObj["from_unixfd"] = (Json::Value::Int64)s->cpu_ts_from_unixfd_count;
+            cpuTsObj["at_reception"] = (Json::Value::Int64)s->cpu_ts_at_reception_count;
+            root["cpu_ts"] = cpuTsObj;
 
             // Save session tags to a global file if we haven't already
             // Actually, we should save it once in index.json or tags.json

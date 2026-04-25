@@ -160,6 +160,7 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
         clock_gettime(CLOCK_REALTIME, &ts);
         long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
         as->frames.push_back({cpu_ts, buffer_ts_ns});
+        as->cpu_ts_at_reception_count++;
     }
     return GST_PAD_PROBE_OK;
 }
@@ -197,6 +198,12 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
             cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        }
+
+        if (sender_cpu_ts != 0) {
+            s->cpu_ts_from_unixfd_count++;
+        } else {
+            s->cpu_ts_at_reception_count++;
         }
 
         s->frames.push_back({cpu_ts, buffer_ts_ns});
