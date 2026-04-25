@@ -159,35 +159,33 @@ bool Config::load_recursive(const std::string& path,
         // Fallback or ignore if not in a ROS workspace
     }
 
+    // Build search paths
+    std::vector<std::string> search_paths;
+    search_paths.push_back(config_dir);
+    if (!share_dir.empty()) search_paths.push_back(share_dir);
+    if (!master_dir.empty() && master_dir != ".") search_paths.push_back(master_dir);
+
     // Recursively load referenced configuration files
     for (const auto& ref : cfg.configuration_files) {
-        // Try relative to this config's directory first, then share_dir, then master_dir
-        std::string candidate = config_dir + "/" + ref;
-        std::ifstream test(candidate);
-        if (!test.good()) {
-            if (!share_dir.empty()) {
-                candidate = share_dir + "/" + ref;
-                std::ifstream test_share(candidate);
-                if (!test_share.good()) {
-                    candidate = master_dir + "/" + ref;
-                    std::ifstream test_master(candidate);
-                    if (!test_master.good()) {
-                        std::cerr << "Failed to find configuration file: " << ref << std::endl;
-                        std::cerr << "  tried relative to config: " << config_dir + "/" + ref << std::endl;
-                        std::cerr << "  tried in share: " << share_dir + "/" + ref << std::endl;
-                        std::cerr << "  tried relative to master: " << master_dir + "/" + ref << std::endl;
-                    }
-                }
-            } else {
-                candidate = master_dir + "/" + ref;
-                std::ifstream test_master(candidate);
-                if (!test_master.good()) {
-                    std::cerr << "Failed to find configuration file: " << ref << std::endl;
-                    std::cerr << "  tried relative to config: " << config_dir + "/" + ref << std::endl;
-                    std::cerr << "  tried relative to master: " << master_dir + "/" + ref << std::endl;
-                }
+        std::string candidate = "";
+        for (const auto& sp : search_paths) {
+            std::string test_path = sp + "/" + ref;
+            std::ifstream test(test_path);
+            if (test.good()) {
+                candidate = test_path;
+                break;
             }
         }
+
+        if (candidate.empty()) {
+            std::cerr << "Failed to find configuration file: " << ref << std::endl;
+            std::cerr << "  Search paths tried:" << std::endl;
+            for (const auto& sp : search_paths) {
+                std::cerr << "    - " << sp << "/" << ref << std::endl;
+            }
+            return false;
+        }
+
         if (!load_recursive(candidate, master_dir, visited, out)) {
             return false;
         }

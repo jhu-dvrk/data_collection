@@ -32,6 +32,7 @@ struct VideoConfig {
 struct RosTopicConfig {
     std::string name;
     bool continuous = false;
+    bool enabled = true;
 };
 
 struct AppConfig {

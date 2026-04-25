@@ -98,7 +98,7 @@ void setup_ros_monitoring(AppData* ad) {
 
         std::lock_guard<std::mutex> lock(ad->data_mutex);
 
-        for (const auto& topic_cfg : ad->ros_topics) {
+        for (auto& topic_cfg : ad->ros_topics) {
             std::string topic = topic_cfg.name;
             bool is_continuous = topic_cfg.continuous;
 
@@ -108,9 +108,11 @@ void setup_ros_monitoring(AppData* ad) {
                 std::string type = topic_names_and_types[topic][0];
                 // Removed print found topic
 
-                auto callback = [ad, topic, type, is_continuous](std::shared_ptr<rclcpp::SerializedMessage> msg) {
+                auto callback = [ad, &topic_cfg, topic, type, is_continuous](std::shared_ptr<rclcpp::SerializedMessage> msg) {
                     std::lock_guard<std::mutex> lock(ad->data_mutex);
-                    if ((ad->global_recording || (is_continuous && ad->any_recording_started)) && ad->bag_writer) {
+                    if ((ad->global_recording || (is_continuous && ad->any_recording_started)) && 
+                        ad->bag_writer &&
+                        topic_cfg.enabled) {
                         try {
                              rosbag2_storage::TopicMetadata tm;
                              tm.name = topic;

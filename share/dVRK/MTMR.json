@@ -18,10 +18,6 @@
       "continuous": true
     },
     {
-      "name": "/MTMR/gripper/setpoint_js",
-      "continuous": true
-    },
-    {
       "name": "/MTMR/local/measured_cp",
       "continuous": true
     },

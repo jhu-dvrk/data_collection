@@ -577,31 +577,93 @@ void MainWindow::update_stage_highlighting() {
 
 void MainWindow::on_bag_details_clicked() {
     Gtk::Dialog dialog("ROS Topic Details", *this, true);
+    dialog.set_default_size(600, 400);
     Gtk::Box *content = dialog.get_content_area();
 
-    std::stringstream ss;
+    // Define columns
+    class ModelColumns : public Gtk::TreeModel::ColumnRecord {
+    public:
+        ModelColumns() {
+            add(m_col_enabled);
+            add(m_col_name);
+            add(m_col_topic_raw);
+            add(m_col_color);
+        }
+        Gtk::TreeModelColumn<bool> m_col_enabled;
+        Gtk::TreeModelColumn<std::string> m_col_name;
+        Gtk::TreeModelColumn<std::string> m_col_topic_raw;
+        Gtk::TreeModelColumn<std::string> m_col_color;
+    };
+
+    ModelColumns columns;
+    Glib::RefPtr<Gtk::ListStore> store = Gtk::ListStore::create(columns);
+    Gtk::TreeView *tree = Gtk::manage(new Gtk::TreeView(store));
+
+    // Enable/Disable column - Manual renderer setup for better control
+    Gtk::CellRendererToggle* pToggleRenderer = Gtk::manage(new Gtk::CellRendererToggle());
+    pToggleRenderer->set_activatable(true);
+    
+    int enabled_col_idx = tree->append_column("Rec", *pToggleRenderer);
+    Gtk::TreeViewColumn* pToggleColumn = tree->get_column(enabled_col_idx - 1);
+    if (pToggleColumn) {
+        pToggleColumn->add_attribute(pToggleRenderer->property_active(), columns.m_col_enabled);
+    }
+
+    // Connect toggle signal
+    auto col_enabled = columns.m_col_enabled;
+    auto col_topic_raw = columns.m_col_topic_raw;
+    pToggleRenderer->signal_toggled().connect([this, store, col_enabled, col_topic_raw](const std::string& path_str) {
+        Gtk::TreePath path(path_str);
+        Gtk::TreeIter iter = store->get_iter(path);
+        if (iter) {
+            Gtk::TreeModel::Row row = *iter;
+            bool new_val = !row[col_enabled];
+            row[col_enabled] = new_val; // Update UI
+            
+            std::string topic = row[col_topic_raw];
+            std::lock_guard<std::mutex> lock(m_data->data_mutex);
+            for (auto& t : m_data->ros_topics) {
+                if (t.name == topic) {
+                    t.enabled = new_val; // Update backend
+                    break;
+                }
+            }
+        }
+    });
+
+    // Name column
+    Gtk::CellRendererText* pTextRenderer = Gtk::manage(new Gtk::CellRendererText());
+    int name_col_idx = tree->append_column("Topic", *pTextRenderer);
+    Gtk::TreeViewColumn* pNameCol = tree->get_column(name_col_idx - 1);
+    if (pNameCol) {
+        pNameCol->add_attribute(pTextRenderer->property_text(), columns.m_col_name);
+        pNameCol->add_attribute(pTextRenderer->property_foreground(), columns.m_col_color);
+    }
+
+    Gtk::ScrolledWindow *sw = Gtk::manage(new Gtk::ScrolledWindow());
+    sw->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    sw->set_border_width(BOX_SPACING_PX);
+    sw->add(*tree);
+    content->pack_start(*sw, Gtk::PACK_EXPAND_WIDGET);
 
     {
         std::lock_guard<std::mutex> lock(m_data->data_mutex);
-        ss << "<b>Subscribed Topics (" << m_data->bag_topics_found << "/"
-           << m_data->ros_topics.size() << "):</b>\n";
         for (const auto &topic_cfg : m_data->ros_topics) {
             std::string topic = topic_cfg.name;
             bool found = m_data->subscribed_topics.count(topic);
-            std::string status = found ? "<span foreground='green'>✔</span> "
-                                       : "<span foreground='red'>✘</span> ";
-            ss << status << topic;
+            
+            auto row = *(store->append());
+            row[columns.m_col_enabled] = topic_cfg.enabled;
+            
+            std::string display_name = topic;
             if (topic_cfg.continuous) {
-                ss << " <small><i>(continuous)</i></small>";
+                display_name += " (continuous)";
             }
-            ss << "\n";
+            row[columns.m_col_name] = display_name;
+            row[columns.m_col_topic_raw] = topic;
+            row[columns.m_col_color] = found ? "black" : "red";
         }
     }
-
-    Gtk::Label *lbl = Gtk::manage(new Gtk::Label());
-    lbl->set_markup(ss.str());
-    lbl->set_padding(10, 10);
-    content->add(*lbl);
 
     dialog.add_button("Close", Gtk::RESPONSE_CLOSE);
     dialog.show_all_children();
@@ -784,16 +846,24 @@ bool MainWindow::on_ui_update() {
 
     char bag_buf[512];
     std::lock_guard<std::mutex> lock(m_data->data_mutex);
-    if ((size_t)m_data->bag_topics_found < m_data->ros_topics.size()) {
-        snprintf(bag_buf, sizeof(bag_buf),
-                 "<span foreground='red'>Topics: %d/%lu</span>\nMessages: %lld",
-                 m_data->bag_topics_found, m_data->ros_topics.size(),
-                 m_data->bag_messages_recorded);
-    } else {
-        snprintf(bag_buf, sizeof(bag_buf), "Topics: %d/%lu\nMessages: %lld",
-                 m_data->bag_topics_found, m_data->ros_topics.size(),
-                 m_data->bag_messages_recorded);
+
+    int nb_config = m_data->ros_topics.size();
+    int nb_enabled = 0;
+    int nb_live_and_enabled = 0;
+    for (const auto& t : m_data->ros_topics) {
+        if (t.enabled) {
+            nb_enabled++;
+            if (m_data->subscribed_topics.count(t.name)) {
+                nb_live_and_enabled++;
+            }
+        }
     }
+
+    const char* color = (nb_live_and_enabled == nb_enabled) ? "green" : "red";
+    snprintf(bag_buf, sizeof(bag_buf),
+             "Topics, configuration %d, enabled %d, <span foreground='%s'>live %d</span>\nMessages: %lld",
+             nb_config, nb_enabled, color, nb_live_and_enabled,
+             m_data->bag_messages_recorded);
     m_bag_stats_label.set_markup(bag_buf);
 
     return true;
