@@ -22,6 +22,7 @@ public:
     // Safe to call multiple times (idempotent).
     void finalize_session();
     void start_ros_sync();
+    void trigger_stop_recording();
 
 protected:
     // Signal handlers

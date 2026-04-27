@@ -2,9 +2,11 @@
 #include "context.hpp"
 #include "video_stream.hpp"
 #include "audio_stream.hpp"
+#include "ui.hpp"
 
 #include <iostream>
 #include <gst/video/video.h>
+#include <glibmm.h>
 #include "../common/cpu_timestamp_meta.hpp"
 
 extern int app_max_threads;
@@ -234,7 +236,9 @@ gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data) {
         if (is_pipeline) {
             int target = ad->streams.size() + ((ad->audio_stream && ad->audio_stream->pipeline) ? 1 : 0);
             ad->eos_received_count++;
-            if (ad->eos_received_count >= target) gtk_main_quit();
+            // Ignore runtime EOS from failed/disconnected streams.
+            // Only quit the GTK loop when we are explicitly shutting down.
+            if (ad->is_quitting && ad->eos_received_count >= target) gtk_main_quit();
         }
     } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ELEMENT) {
         const GstStructure *s = gst_message_get_structure(msg);
@@ -253,7 +257,44 @@ gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data) {
         }
     } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
         gchar *dbg; GError *err; gst_message_parse_error(msg, &err, &dbg);
-        std::cerr << "Error: " << err->message << std::endl; g_free(dbg); g_error_free(err);
+        const gchar *msg_src_name = GST_MESSAGE_SRC_NAME(msg);
+        std::cerr << "Error from " << (msg_src_name ? msg_src_name : "unknown")
+                  << ": " << err->message << std::endl;
+
+        // Identify which stream failed
+        GstObject *src = GST_MESSAGE_SRC(msg);
+        VideoStream *failed_vs = nullptr;
+        
+        // Loop through video streams
+        for (auto s : ad->streams) {
+            if (s->pipeline && (src == GST_OBJECT(s->pipeline) || gst_object_has_as_ancestor(src, GST_OBJECT(s->pipeline)))) {
+                failed_vs = s;
+                break;
+            }
+        }
+
+        if (failed_vs) {
+            std::cerr << "Setting has_error for stream: " << failed_vs->name << std::endl;
+            {
+                std::lock_guard<std::mutex> lock(ad->data_mutex);
+                failed_vs->has_error = true;
+                failed_vs->error_message = err->message;
+            }
+
+            // Stop recording if active
+            if (ad->global_recording && ad->window) {
+                // We are in the GStreamer bus thread (often the GLib main loop thread)
+                // Use a dispatcher or just call via Glib::signal_idle for safe UI interaction
+                Glib::signal_idle().connect_once([ad]() {
+                    if (ad->window) {
+                        MainWindow *mw = static_cast<MainWindow*>(Glib::wrap(ad->window));
+                        mw->trigger_stop_recording();
+                    }
+                });
+            }
+        }
+
+        g_free(dbg); g_error_free(err);
     }
     return TRUE;
 }

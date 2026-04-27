@@ -30,6 +30,7 @@ public:
     std::string name;
     GstElement *pipeline, *valve, *rec_overlay;
     GtkWidget *preview_widget, *record_checkbox, *stats_label;
+    GtkWidget *stream_name_label, *preview_stack;
     std::string output_video, output_json;
     std::string pipeline_desc;
     std::vector<FrameData> frames;
@@ -56,6 +57,9 @@ public:
     long long last_fps_ts, fps_frame_counter;
 
     std::string side_by_side;
+
+    bool has_error;
+    std::string error_message;
 
 private:
     AppData* m_ad;
