@@ -22,6 +22,7 @@ struct VideoConfig {
     std::string stream;
     bool has_unixfd_socket_path = false;
     std::string unixfd_socket_path = "";
+    std::string unixfd_stream = "";
     VideoEncoding encoding;
     bool record = true;
     bool timestamp_overlay = false;

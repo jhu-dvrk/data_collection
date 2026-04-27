@@ -70,6 +70,9 @@ std::vector<VideoConfig> Config::parse_videos(const Json::Value& root) {
             cfg.has_unixfd_socket_path = true;
             cfg.unixfd_socket_path = v["unixfd_socket_path"].asString();
         }
+        if (v.isMember("unixfd_stream")) {
+            cfg.unixfd_stream = v["unixfd_stream"].asString();
+        }
         if (v.isMember("record")) cfg.record = v["record"].asBool();
         if (v.isMember("timestamp_overlay")) cfg.timestamp_overlay = v["timestamp_overlay"].asBool();
         if (v.isMember("side_by_side")) cfg.side_by_side = v["side_by_side"].asString();

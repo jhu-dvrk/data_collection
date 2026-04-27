@@ -3,7 +3,7 @@
   "videos": [
     {
       "name": "dvrk_display",
-      "unixfd_socket_path": "",
+      "unixfd_stream": "stereo",
       "record": true,
       "timestamp_overlay": false,
       "encoding": {

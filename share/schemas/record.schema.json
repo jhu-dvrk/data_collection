@@ -67,7 +67,12 @@
           },
           "stream": {
             "type": "string",
-            "description": "GStreamer source pipeline description (e.g. 'v4l2src device=/dev/video0'). Ignored when unixfd_socket_path is defined."
+            "description": "GStreamer source pipeline description (e.g. 'v4l2src device=/dev/video0'). Ignored when unixfd_socket_path or unixfd_stream is defined."
+          },
+          "unixfd_stream": {
+            "type": "string",
+            "enum": ["left", "right", "stereo", "overlay"],
+            "description": "If defined, use unixfdsrc to subscribe to a named dvrk_display stream suffix using the standard naming convention /tmp/dvrk_display_<stream>_<user>.sock."
           },
           "unixfd_socket_path": {
             "type": "string",

@@ -80,18 +80,37 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     }
 
     std::string source_stream = v->stream;
-    if (v->has_unixfd_socket_path) {
+
+    bool use_unixfd = v->has_unixfd_socket_path || !v->unixfd_stream.empty();
+    if (use_unixfd) {
         std::string socket_path = v->unixfd_socket_path;
-        if (socket_path.empty()) {
-            // Generate default socket path using username
-            const char* username = getenv("USER");
-            if (!username) {
-                struct passwd* pw = getpwuid(getuid());
-                username = pw ? pw->pw_name : "unknown";
-            }
-            socket_path = "/tmp/" + v->name + "_" + std::string(username) + ".sock";
+        const char *username = getenv("USER");
+        if (!username) {
+            struct passwd *pw = getpwuid(getuid());
+            username = pw ? pw->pw_name : "unknown";
         }
-        source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=false ! videoconvert ! video/x-raw,format=NV12 ! queue name=__remote_offset_q__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream";
+
+        if (!v->unixfd_stream.empty()) {
+            if (v->has_unixfd_socket_path) {
+                std::cerr << "Warning for stream \"" << v->name
+                          << "\": both unixfd_stream and unixfd_socket_path "
+                             "are set. Using unixfd_stream."
+                          << std::endl;
+            }
+            // Use dvrk_display convention: /tmp/dvrk_display_<stream>_<user>.sock
+            socket_path = "/tmp/dvrk_display_" + v->unixfd_stream + "_" +
+                          std::string(username) + ".sock";
+        } else if (socket_path.empty()) {
+            // Generate default socket path using username and stream name (old
+            // legacy behavior)
+            socket_path =
+                "/tmp/" + v->name + "_" + std::string(username) + ".sock";
+        }
+        source_stream =
+            "unixfdsrc socket-path=" + socket_path +
+            " do-timestamp=false ! videoconvert ! video/x-raw,format=NV12 ! "
+            "queue name=__remote_offset_q__ max-size-buffers=2 "
+            "max-size-time=0 max-size-bytes=0 leaky=downstream";
     }
 
     if (source_stream.empty()) {

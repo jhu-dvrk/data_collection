@@ -245,6 +245,8 @@ MainWindow::MainWindow(AppData *data)
 
     m_data->record_button = (GtkWidget *)m_record_button.gobj();
 
+    add_events(Gdk::KEY_PRESS_MASK);
+
     show_all_children();
 
     m_update_conn = Glib::signal_timeout().connect(
@@ -704,6 +706,14 @@ void MainWindow::on_tag_clicked(const std::string &tag_name) {
             btn->set_label(name + " (" + std::to_string(counts[name]) + ")");
         }
     }
+}
+
+bool MainWindow::on_key_press_event(GdkEventKey *event) {
+    if ((event->state & GDK_CONTROL_MASK) && (event->keyval == GDK_KEY_q)) {
+        close();
+        return true;
+    }
+    return Gtk::Window::on_key_press_event(event);
 }
 
 void MainWindow::on_record_toggle() {
