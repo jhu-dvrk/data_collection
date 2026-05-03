@@ -130,7 +130,9 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     std::string sn = v->name;
     for (char &c : sn) if (c == ' ') c = '_';
 
-    dump_dot(this->pipeline, ad->session_dir, sn + "_pipeline");
+    if (ad->dump_dot) {
+        dc::dump_dot(this->pipeline, ad->session_dir + "/" + sn + "_pipeline.dot", ad->dot_flags);
+    }
 
     // Source probe on tee sink pad (before split to preview / record)
     GstElement *tee = gst_bin_get_by_name(GST_BIN(this->pipeline), "__rec_t__");

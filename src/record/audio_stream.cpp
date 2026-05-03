@@ -73,7 +73,9 @@ bool AudioStream::create(AppData* ad) {
         gst_object_unref(asink);
     }
 
-    dump_dot(this->pipeline, ad->session_dir, "audio_pipeline");
+    if (ad->dump_dot) {
+        dc::dump_dot(this->pipeline, ad->session_dir + "/audio_pipeline.dot", ad->dot_flags);
+    }
 
     GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(this->pipeline));
     gst_bus_add_watch(bus, bus_call, ad);

@@ -24,6 +24,7 @@
 #include "ros_node.hpp"
 #include "config.hpp"
 #include "../common/cpu_timestamp_meta.hpp"
+#include "../common/gst_utils.hpp"
 
 // Signal handler for Ctrl+C
 static gboolean on_sigint(gpointer user_data) {
@@ -56,6 +57,8 @@ int main(int argc, char *argv[]) {
 
     time_t now_raw; char buf[80]; time(&now_raw); strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", localtime(&now_raw));
     data.start_timestamp = buf;
+    data.dump_dot = false;
+    data.dot_flags = GST_DEBUG_GRAPH_SHOW_ALL;
 
     for (int i=1; i<argc; ++i) {
         std::string arg = argv[i];
@@ -74,9 +77,12 @@ int main(int argc, char *argv[]) {
             if (app_max_threads < 1) app_max_threads = 1;
         } else if (arg == "-p" && i+1 < argc) {
             data.trigger_topic = argv[++i];
+        } else if (dc::parse_dot_arguments(i, argc, argv, data.dump_dot, data.dot_flags)) {
+            continue;
         } else {
             std::cerr << "Error: Unknown argument or missing -c for config: " << arg << std::endl;
-            std::cerr << "Usage: " << argv[0] << " -c <config.json> [-j <threads>] [-p <trigger_topic>]" << std::endl;
+            std::cerr << "Usage: " << argv[0] << " -c <config.json> [-j <threads>] [-p <trigger_topic>] [-g <0|1|2|3>]" << std::endl;
+            dc::print_dot_usage();
             return 1;
         }
     }

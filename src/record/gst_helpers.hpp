@@ -5,6 +5,7 @@
 #include <gst/gst.h>
 #include <cairo.h>
 #include <json/json.h>
+#include "../common/gst_utils.hpp"
 #include "../common/config.hpp"
 
 // Forward declarations
@@ -15,7 +16,6 @@ class AudioStream;
 // Global GStreamer Helpers
 std::string get_best_encoder(const dc::VideoEncoding& enc_cfg);
 double get_audio_level_max(const GValue* gv);
-void dump_dot(GstElement* pipeline, const std::string& session_dir, const std::string& name);
 void shutdown_pipeline(GstElement* pipeline);  // Send EOS, wait, set NULL, remove bus watch
 
 // GStreamer Callbacks

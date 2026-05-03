@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <gst/video/video.h>
+#include "../common/gst_utils.hpp"
 #include "../common/cpu_timestamp_meta.hpp"
 
 extern int app_max_threads;
@@ -98,14 +99,7 @@ double get_audio_level_max(const GValue* gv) {
     return m;
 }
 
-void dump_dot(GstElement* pipeline, const std::string& session_dir, const std::string& name) {
-    gchar* dot_data = gst_debug_bin_to_dot_data(GST_BIN(pipeline), GST_DEBUG_GRAPH_SHOW_ALL);
-    if (dot_data) {
-        std::string dot_path = session_dir + "/" + name + ".dot";
-        g_file_set_contents(dot_path.c_str(), dot_data, -1, NULL);
-        g_free(dot_data);
-    }
-}
+
 
 GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
     VideoStream *s = (VideoStream *)user_data;

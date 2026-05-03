@@ -28,6 +28,7 @@ pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 add_library(data_collection_lib
   src/common/config.cpp
   src/common/tags.cpp
+  src/common/gst_utils.cpp
 )
 target_include_directories(data_collection_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/common>
@@ -39,8 +40,13 @@ ament_target_dependencies(data_collection_lib
   ament_index_cpp
 )
 
-# Alias for easier usage if needed, though target name is fine
-set_target_properties(data_collection_lib PROPERTIES OUTPUT_NAME "data_collection")
+# Install the library
+install(TARGETS data_collection_lib
+  EXPORT export_data_collection_lib
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
 
 # C++ Executable: record
 add_executable(record
@@ -158,11 +164,13 @@ install(DIRECTORY share/
 # Install common headers for dependent packages
 install(FILES
   src/common/cpu_timestamp_meta.hpp
+  src/common/gst_utils.hpp
   DESTINATION include/${PROJECT_NAME}
 )
 
 # Export include directories for downstream packages
 ament_export_include_directories(include)
+ament_export_targets(export_data_collection_lib HAS_LIBRARY_TARGET)
 
 # Resource index
 ament_package()

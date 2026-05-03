@@ -1,0 +1,18 @@
+{
+  "type": "dc::config@1.0.0",
+  "videos": [
+    {
+      "name": "dvrk_test_synthetic",
+      "unixfd_socket_path": "",
+      "record": true,
+      "timestamp_overlay": false,
+      "encoding": {
+        "bitrate": 20000,
+        "frame_rate": 30
+      }
+    }
+  ],
+  "ros_topics": [
+    "/dvrk_test/correlation"
+  ]
+}
