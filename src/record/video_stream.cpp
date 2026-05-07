@@ -11,14 +11,14 @@
 
 extern int app_max_threads;
 
-VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL),
+VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL), stream_name_label(NULL), preview_stack(NULL),
                 is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0), estimated_latency(0.0),
                 cpu_ts_from_unixfd_count(0), cpu_ts_at_reception_count(0),
                 width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                 rec_width(0), rec_height(0), rec_fps_requested(0.0),
                 total_offset_ns(0), last_raw_buffer_ts(-1), last_duration(0),
                 last_fps_ts(0), fps_frame_counter(0),
-                m_ad(NULL) {}
+                has_error(false), m_ad(NULL) {}
 
 VideoStream::~VideoStream() {
     // Pipeline should already be shut down via shutdown()
@@ -77,18 +77,23 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     }
 
     std::string source_stream = v->stream;
+
     if (v->has_unixfd_socket_path) {
         std::string socket_path = v->unixfd_socket_path;
         if (socket_path.empty()) {
-            // Generate default socket path using username
-            const char* username = getenv("USER");
+            // Generate default socket path using username and stream name
+            const char *username = getenv("USER");
             if (!username) {
-                struct passwd* pw = getpwuid(getuid());
+                struct passwd *pw = getpwuid(getuid());
                 username = pw ? pw->pw_name : "unknown";
             }
             socket_path = "/tmp/" + v->name + "_" + std::string(username) + ".sock";
         }
-        source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=true ! videoconvert ! video/x-raw,format=NV12 ! queue name=__remote_offset_q__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream";
+        source_stream =
+            "unixfdsrc socket-path=" + socket_path +
+            " do-timestamp=true ! videoconvert ! video/x-raw,format=NV12 ! "
+            "queue name=__remote_offset_q__ max-size-buffers=2 "
+            "max-size-time=0 max-size-bytes=0 leaky=downstream";
     }
 
     if (source_stream.empty()) {
@@ -172,7 +177,8 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     GstElement *sink = gst_bin_get_by_name(GST_BIN(this->pipeline), "__prev_sink__");
     if (sink) {
         g_object_get(sink, "widget", &this->preview_widget, NULL);
-        gtk_widget_set_size_request(this->preview_widget, 320, 240);
+        // We do not set a fixed size request here to allow the widget to shrink.
+        // The container in the UI will handle size through packing.
         gst_object_unref(sink);
     }
 

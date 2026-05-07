@@ -22,6 +22,7 @@ public:
     // Safe to call multiple times (idempotent).
     void finalize_session();
     void start_ros_sync();
+    void trigger_stop_recording();
 
 protected:
     // Signal handlers
@@ -31,6 +32,7 @@ protected:
     void on_stage_changed();
     void on_bag_details_clicked();
     bool on_ui_update();
+    bool on_key_press_event(GdkEventKey* event) override;
 
     // Helpers
     void update_stage_highlighting();

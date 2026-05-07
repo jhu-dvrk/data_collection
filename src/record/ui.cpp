@@ -245,6 +245,9 @@ MainWindow::MainWindow(AppData *data)
     m_bottom_hbox.pack_end(m_quit_button, Gtk::PACK_SHRINK);
 
     m_data->record_button = (GtkWidget *)m_record_button.gobj();
+    m_data->window = (GtkWidget *)this->gobj();
+
+    add_events(Gdk::KEY_PRESS_MASK);
 
     show_all_children();
 
@@ -518,6 +521,7 @@ MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream *s) {
     name_label->set_markup("<b>" + s->name + "</b>");
     name_label->set_alignment(0.0, 0.5);
     header_hbox->pack_start(*name_label, Gtk::PACK_EXPAND_WIDGET);
+    s->stream_name_label = (GtkWidget *)name_label->gobj();
 
     sw.record_check = Gtk::manage(new Gtk::CheckButton("Record"));
     sw.record_check->set_active(true);
@@ -526,16 +530,36 @@ MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream *s) {
 
     // Preview
     Gtk::Frame *frame = Gtk::manage(new Gtk::Frame());
+    Gtk::Stack *preview_stack = Gtk::manage(new Gtk::Stack());
+    preview_stack->set_transition_type(Gtk::STACK_TRANSITION_TYPE_NONE);
+    preview_stack->set_hexpand(true);
+    preview_stack->set_vexpand(true);
+
     if (s->preview_widget) {
         Gtk::Widget *gtkmm_preview = Glib::wrap(s->preview_widget);
         gtkmm_preview->set_hexpand(true);
         gtkmm_preview->set_vexpand(true);
-        gtkmm_preview->set_size_request(640, 480);
-        frame->add(*gtkmm_preview);
+        // Set a minimum size that is smaller than the default to allow shrinking,
+        // while still ensuring the widget isn't completely hidden at start.
+        gtkmm_preview->set_size_request(160, 120);
+        preview_stack->add(*gtkmm_preview, "preview");
     } else {
         sw.preview = Gtk::manage(new Gtk::Image());
-        frame->add(*sw.preview);
+        sw.preview->set_hexpand(true);
+        sw.preview->set_vexpand(true);
+        preview_stack->add(*sw.preview, "preview");
     }
+
+    Gtk::EventBox *black_box = Gtk::manage(new Gtk::EventBox());
+    black_box->set_size_request(160, 120);
+    Gdk::RGBA black;
+    black.set_rgba(0.0, 0.0, 0.0, 1.0);
+    black_box->override_background_color(black);
+    preview_stack->add(*black_box, "error");
+    preview_stack->set_visible_child("preview");
+
+    s->preview_stack = (GtkWidget *)preview_stack->gobj();
+    frame->add(*preview_stack);
     sw.container->pack_start(*frame,
                              Gtk::PACK_EXPAND_WIDGET); // Issue 5: Expand preview
 
@@ -688,6 +712,12 @@ void MainWindow::on_bag_details_clicked() {
 
 void MainWindow::trigger_record_toggle() { on_record_toggle(); }
 
+void MainWindow::trigger_stop_recording() {
+    if (m_data->global_recording) {
+        on_record_toggle();
+    }
+}
+
 void MainWindow::on_tag_clicked(const std::string &tag_name) {
     // Get current CPU time
     struct timespec ts;
@@ -710,6 +740,14 @@ void MainWindow::on_tag_clicked(const std::string &tag_name) {
             btn->set_label(name + " (" + std::to_string(counts[name]) + ")");
         }
     }
+}
+
+bool MainWindow::on_key_press_event(GdkEventKey *event) {
+    if ((event->state & GDK_CONTROL_MASK) && (event->keyval == GDK_KEY_q)) {
+        close();
+        return true;
+    }
+    return Gtk::Window::on_key_press_event(event);
 }
 
 void MainWindow::on_record_toggle() {
@@ -847,8 +885,36 @@ bool MainWindow::on_ui_update() {
     if (m_data->is_quitting)
         return false;
 
+    // Use a lock while accessing stream error states
+    std::lock_guard<std::mutex> lock(m_data->data_mutex);
+
     for (auto s : m_data->streams) {
         char buf[512];
+        if (s->has_error) {
+            if (s->stream_name_label) {
+                gtk_label_set_markup(GTK_LABEL(s->stream_name_label),
+                                     ("<span foreground='red'><b>" + s->name +
+                                      "</b></span>")
+                                         .c_str());
+            }
+            if (s->preview_stack) {
+                gtk_stack_set_visible_child_name(GTK_STACK(s->preview_stack),
+                                                 "error");
+            }
+            snprintf(buf, sizeof(buf), "<span foreground='red'><b>ERROR: %s</b></span>", s->error_message.c_str());
+            gtk_label_set_markup(GTK_LABEL(s->stats_label), buf);
+            continue;
+        }
+
+        if (s->stream_name_label) {
+            gtk_label_set_markup(GTK_LABEL(s->stream_name_label),
+                                 ("<b>" + s->name + "</b>").c_str());
+        }
+        if (s->preview_stack) {
+            gtk_stack_set_visible_child_name(GTK_STACK(s->preview_stack),
+                                             "preview");
+        }
+
         if (s->is_recording) {
             snprintf(buf, sizeof(buf), "REC | FPS: %.1f | Frames: %lld",
                      s->current_fps, s->frames_recorded);
@@ -872,7 +938,6 @@ bool MainWindow::on_ui_update() {
     }
 
     char bag_buf[512];
-    std::lock_guard<std::mutex> lock(m_data->data_mutex);
 
     int nb_config = m_data->ros_topics.size();
     int nb_enabled = 0;
