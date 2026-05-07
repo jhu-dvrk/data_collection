@@ -55,22 +55,19 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
 
     // Recording and encoding caps
     // Use an extra videoconvert to ensure we can reach the desired format/size
-    std::string rec_pipeline_segment = "";
+    std::string rec_pipeline_segment = " ! videoconvert n-threads=" + std::to_string(app_max_threads);
     std::string rec_caps = "video/x-raw,format=NV12";
     
     bool needs_scale = v->encoding.width > 0 && v->encoding.height > 0;
     bool needs_rate = v->encoding.frame_rate > 0;
 
-    if (needs_scale || needs_rate) {
-        rec_pipeline_segment = " ! videoconvert n-threads=" + std::to_string(app_max_threads);
-        if (needs_scale) {
-            rec_pipeline_segment += " ! videoscale";
-            rec_caps += ",width=" + std::to_string(v->encoding.width) + ",height=" + std::to_string(v->encoding.height);
-        }
-        if (needs_rate) {
-            rec_pipeline_segment += " ! videorate skip-to-first=true";
-            rec_caps += ",framerate=" + std::to_string(v->encoding.frame_rate) + "/1";
-        }
+    if (needs_scale) {
+        rec_pipeline_segment += " ! videoscale";
+        rec_caps += ",width=" + std::to_string(v->encoding.width) + ",height=" + std::to_string(v->encoding.height);
+    }
+    if (needs_rate) {
+        rec_pipeline_segment += " ! videorate skip-to-first=true";
+        rec_caps += ",framerate=" + std::to_string(v->encoding.frame_rate) + "/1";
     }
 
     std::string ts_overlay = "";
@@ -91,7 +88,7 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
             }
             socket_path = "/tmp/" + v->name + "_" + std::string(username) + ".sock";
         }
-        source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=false ! videoconvert ! video/x-raw,format=NV12 ! queue name=__remote_offset_q__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream";
+        source_stream = "unixfdsrc socket-path=" + socket_path + " do-timestamp=true ! videoconvert ! video/x-raw,format=NV12 ! queue name=__remote_offset_q__ max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream";
     }
 
     if (source_stream.empty()) {
@@ -235,6 +232,11 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
             Json::Value fv;
             fv["cpu_ns"] = (Json::Value::Int64)f.cpu_ts;
             fv["gst_ns"] = (Json::Value::Int64)f.buffer_ts_ns;
+            fv["mono_source_ns"] = (Json::Value::Int64)f.mono_source_ts;
+            fv["left_source_ns"] = (Json::Value::Int64)f.left_source_ts;
+            fv["right_source_ns"] = (Json::Value::Int64)f.right_source_ts;
+            fv["stereo_output_ns"] = (Json::Value::Int64)f.stereo_output_ts;
+            fv["overlay_output_ns"] = (Json::Value::Int64)f.overlay_output_ts;
             frame_list.append(fv);
         }
         root["frames"] = frame_list;

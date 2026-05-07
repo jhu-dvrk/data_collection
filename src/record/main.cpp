@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
     gst_init(&argc, &argv);
 
     // Register custom metadata so unixfdsrc can deserialize it
-    dc_cpu_timestamp_meta_register();
+    dc_frame_timestamps_meta_register();
 
     // Initialize Gtkmm (strips GTK args)
     Gtk::Main kit(argc, argv);

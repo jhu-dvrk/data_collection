@@ -2,13 +2,13 @@
   "type": "dc::config@1.0.0",
   "videos": [
     {
-      "name": "dvrk_display",
+      "name": "dvrk_display_stereo",
       "unixfd_socket_path": "",
       "record": true,
       "timestamp_overlay": false,
+      "side_by_side": "LR",
       "encoding": {
-        "bitrate": 20000,
-        "frame_rate": 30
+        "bitrate": 20000
       }
     }
   ]

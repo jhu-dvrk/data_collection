@@ -4,6 +4,7 @@
 #include "tags.hpp"
 #include "video_stream.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -347,6 +348,11 @@ void MainWindow::finalize_session() {
                 Json::Value frameNode;
                 frameNode["cpu_ts"] = (Json::Value::Int64)cpu_ts;
                 frameNode["gst_ts"] = (Json::Value::Int64)f.buffer_ts_ns;
+                frameNode["mono_source_ts"] = (Json::Value::Int64)f.mono_source_ts;
+                frameNode["left_source_ts"] = (Json::Value::Int64)f.left_source_ts;
+                frameNode["right_source_ts"] = (Json::Value::Int64)f.right_source_ts;
+                frameNode["stereo_output_ts"] = (Json::Value::Int64)f.stereo_output_ts;
+                frameNode["overlay_output_ts"] = (Json::Value::Int64)f.overlay_output_ts;
                 framesArr.append(frameNode);
             }
             root["frames"] = framesArr;
@@ -747,6 +753,17 @@ void MainWindow::on_record_toggle() {
             s->is_recording = stream_rec;
             if (s->valve)
                 g_object_set(s->valve, "drop", !stream_rec, NULL);
+
+            if (stream_rec && s->rec_fps_requested > 0.1 && s->src_fps > 0.1) {
+                double used_fps = std::min(s->rec_fps_requested, s->src_fps);
+                if (used_fps < s->rec_fps_requested - 0.5) {
+                    std::cerr << "\033[1;33mWarning for stream \"" << s->name
+                              << "\": configured encoding frame_rate (" << s->rec_fps_requested
+                              << " fps) exceeds measured source FPS (" << s->src_fps
+                              << " fps). videorate will duplicate frames. Effective rate: "
+                              << used_fps << " fps.\033[0m" << std::endl;
+                }
+            }
         }
     } else {
         if (m_data->audio_stream) {

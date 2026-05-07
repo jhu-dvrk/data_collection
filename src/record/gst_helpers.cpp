@@ -52,6 +52,26 @@ void on_rec_overlay_draw(GstElement *overlay, cairo_t *cr, guint64 timestamp, gu
     cairo_show_text(cr, status_buf);
 }
 
+static bool probe_encoder(const std::string& pipeline_str) {
+    GError* err = nullptr;
+    GstElement* pipe = gst_parse_launch(pipeline_str.c_str(), &err);
+    if (!pipe) {
+        if (err) g_error_free(err);
+        return false;
+    }
+    // PAUSED forces caps negotiation and encoder initialization
+    GstStateChangeReturn ret = gst_element_set_state(pipe, GST_STATE_PAUSED);
+    bool ok = (ret != GST_STATE_CHANGE_FAILURE);
+    if (ok) {
+        // Wait up to 2s for async state change to complete
+        ret = gst_element_get_state(pipe, nullptr, nullptr, 2 * GST_SECOND);
+        ok = (ret != GST_STATE_CHANGE_FAILURE);
+    }
+    gst_element_set_state(pipe, GST_STATE_NULL);
+    gst_object_unref(pipe);
+    return ok;
+}
+
 std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
     int br = enc_cfg.bitrate_kbps;
     int preset = enc_cfg.speed_preset;
@@ -63,7 +83,13 @@ std::string get_best_encoder(const dc::VideoEncoding& enc_cfg) {
         if (f) {
             gst_object_unref(f);
             std::string name(c);
-            if (name == "nvh264enc") return "nvh264enc bitrate=" + std::to_string(br) + " zerolatency=true";
+            if (name == "nvh264enc") {
+                std::string enc_str = "nvh264enc bitrate=" + std::to_string(br);
+                std::string test = "videotestsrc num-buffers=1 ! video/x-raw,format=I420,width=320,height=240,framerate=30/1 ! videoconvert ! video/x-raw,format=NV12 ! " + enc_str + " ! fakesink";
+                if (probe_encoder(test)) return enc_str;
+                std::cerr << "\033[1;33mWarning: nvh264enc found but failed runtime probe (preset not supported on this GPU), skipping.\033[0m" << std::endl;
+                continue;
+            }
             if (name == "nvv4l2h264enc") {
                 GstElementFactory* conv = gst_element_factory_find("nvvidconv");
                 if (conv) {
@@ -153,7 +179,7 @@ GstPadProbeReturn audio_timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, g
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         long long cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-        as->frames.push_back({cpu_ts, buffer_ts_ns});
+        as->frames.push_back({cpu_ts, buffer_ts_ns, 0, 0, 0, 0, 0});
         as->cpu_ts_at_reception_count++;
     }
     return GST_PAD_PROBE_OK;
@@ -182,11 +208,28 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
         }
         // Capture original buffer timestamp
         long long buffer_ts_ns = buffer_ts;
-        // Try to get the CPU timestamp from the sender (e.g. stereo display)
-        gint64 sender_cpu_ts = dc_buffer_get_cpu_timestamp(buf);
+        const DcFrameTimestamps frame_timestamps =
+            dc_buffer_get_frame_timestamps(buf);
+        const bool has_remote_timestamps = dc_buffer_has_frame_timestamps(buf);
         long long cpu_ts;
-        if (sender_cpu_ts != 0) {
-            cpu_ts = static_cast<long long>(sender_cpu_ts);
+        if (frame_timestamps.overlay_output_ts != 0) {
+            cpu_ts = static_cast<long long>(frame_timestamps.overlay_output_ts);
+        } else if (frame_timestamps.stereo_output_ts != 0) {
+            cpu_ts = static_cast<long long>(frame_timestamps.stereo_output_ts);
+        } else if (frame_timestamps.mono_source_ts != 0) {
+            cpu_ts = static_cast<long long>(frame_timestamps.mono_source_ts);
+        } else if (frame_timestamps.left_source_ts != 0 &&
+                   frame_timestamps.right_source_ts != 0) {
+            cpu_ts = static_cast<long long>(
+                frame_timestamps.left_source_ts / 2 +
+                frame_timestamps.right_source_ts / 2 +
+                (frame_timestamps.left_source_ts % 2 +
+                 frame_timestamps.right_source_ts % 2) /
+                    2);
+        } else if (frame_timestamps.left_source_ts != 0) {
+            cpu_ts = static_cast<long long>(frame_timestamps.left_source_ts);
+        } else if (frame_timestamps.right_source_ts != 0) {
+            cpu_ts = static_cast<long long>(frame_timestamps.right_source_ts);
         } else {
             // Fallback: capture locally (for non-unixfd sources)
             struct timespec ts;
@@ -194,13 +237,18 @@ GstPadProbeReturn timestamp_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointe
             cpu_ts = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
         }
 
-        if (sender_cpu_ts != 0) {
+        if (has_remote_timestamps) {
             s->cpu_ts_from_unixfd_count++;
         } else {
             s->cpu_ts_at_reception_count++;
         }
 
-        s->frames.push_back({cpu_ts, buffer_ts_ns});
+        s->frames.push_back({cpu_ts, buffer_ts_ns,
+                             static_cast<long long>(frame_timestamps.mono_source_ts),
+                             static_cast<long long>(frame_timestamps.left_source_ts),
+                             static_cast<long long>(frame_timestamps.right_source_ts),
+                             static_cast<long long>(frame_timestamps.stereo_output_ts),
+                             static_cast<long long>(frame_timestamps.overlay_output_ts)});
         s->frames_recorded++;
 
         long long now = g_get_monotonic_time();
