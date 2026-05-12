@@ -278,6 +278,10 @@ void MainWindow::finalize_session() {
         close_bag_writer(m_data);
     }
 
+    for (auto s : m_data->streams) {
+        s->stop_and_save(m_data->config_files);
+    }
+
     // Shut down all pipelines properly
     if (m_data->audio_stream)
         m_data->audio_stream->shutdown();
@@ -305,7 +309,7 @@ void MainWindow::finalize_session() {
         for (const auto &f : m_data->audio_stream->frames) {
             Json::Value frameNode;
             frameNode["cpu_ts"] = (Json::Value::Int64)f.cpu_ts;
-                frameNode["gst_ts"] = (Json::Value::Int64)f.buffer_ts_ns;
+            frameNode["gst_ts"] = (Json::Value::Int64)f.buffer_ts_ns;
             framesArr.append(frameNode);
         }
         root["frames"] = framesArr;
@@ -315,107 +319,33 @@ void MainWindow::finalize_session() {
         std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())->write(root, &os);
     }
 
-    for (auto s : m_data->streams) {
-        if (!s->frames.empty()) {
-            Json::Value root;
-            root["type"] = "dc::sidecar@1.0.0";
-            root["name"] = s->name;
-            root["video_file"] =
-                s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
-            root["gstreamer_pipeline"] = s->pipeline_desc;
-
-            Json::Value cpuTsObj(Json::objectValue);
-            cpuTsObj["from_unixfd"] = (Json::Value::Int64)s->cpu_ts_from_unixfd_count;
-            cpuTsObj["at_reception"] = (Json::Value::Int64)s->cpu_ts_at_reception_count;
-            root["cpu_ts"] = cpuTsObj;
-
-            // Save session tags to a global file if we haven't already
-            // Actually, we should save it once in index.json or tags.json
-
-            Json::Value configFiles(Json::arrayValue);
-            for (const auto &f : m_data->config_files)
-                configFiles.append(f);
-            root["config_files"] = configFiles;
-
-            if (!m_data->session_event_tags.empty() ||
-                !m_data->session_stages.empty() ||
-                m_data->recording_start_cpu_ts > 0) {
-                root["session_tags_file"] = "session_tags.json";
-            }
-
-            Json::Value framesArr(Json::arrayValue);
-            for (size_t i = 0; i < s->frames.size(); ++i) {
-                const auto &f = s->frames[i];
-                long long cpu_ts = f.cpu_ts;
-
-                Json::Value frameNode;
-                frameNode["cpu_ts"] = (Json::Value::Int64)cpu_ts;
-                frameNode["gst_ts"] = (Json::Value::Int64)f.buffer_ts_ns;
-                frameNode["mono_source_ts"] = (Json::Value::Int64)f.mono_source_ts;
-                frameNode["left_source_ts"] = (Json::Value::Int64)f.left_source_ts;
-                frameNode["right_source_ts"] = (Json::Value::Int64)f.right_source_ts;
-                frameNode["stereo_output_ts"] = (Json::Value::Int64)f.stereo_output_ts;
-                frameNode["overlay_output_ts"] = (Json::Value::Int64)f.overlay_output_ts;
-                framesArr.append(frameNode);
-            }
-            root["frames"] = framesArr;
-            root["estimated_latency"] = s->estimated_latency;
-            root["side_by_side"] = s->side_by_side;
-
-            std::ofstream os(s->output_json);
-            Json::StreamWriterBuilder b;
-            std::unique_ptr<Json::StreamWriter>(b.newStreamWriter())
-                ->write(root, &os);
-        }
-    }
-
     // Write index.json
     if (!m_data->streams.empty() ||
         (m_data->audio_stream && !m_data->audio_stream->frames.empty())) {
         Json::Value indexRoot;
         indexRoot["type"] = "dc::index@1.0.0";
-        Json::Value videosArr(Json::arrayValue);
 
+        Json::Value streamsArr(Json::arrayValue);
         for (auto s : m_data->streams) {
-            Json::Value vid;
-            std::string fname =
-                s->output_video.substr(s->output_video.find_last_of("/\\\\") + 1);
-            vid["file"] = fname;
+            Json::Value streamNode(Json::objectValue);
+            streamNode["name"] = s->name;
 
-            double duration = 0.0;
-            if (s->src_fps > 0.1)
-                duration = (double)s->frames.size() / s->src_fps;
-            vid["duration"] = duration;
-
-            videosArr.append(vid);
-        }
-
-        if (m_data->audio_stream && !m_data->audio_stream->frames.empty()) {
-            Json::Value aud;
-            std::string fname = "audio.wav";
-            aud["file"] = fname;
-            double duration = 0.0;
-            const auto &af = m_data->audio_stream->frames;
-            if (af.size() > 1) {
-                for (size_t i = 0; i < af.size() - 1; ++i) {
-                    long long diff = af[i + 1].cpu_ts - af[i].cpu_ts;
-                    if (diff < 500 * 1000000) { // 500ms threshold for gaps
-                        duration += (double)diff / 1e9;
-                    }
-                }
-                // Adjust for last frame
-                if (duration > 0)
-                    duration += (duration / (af.size() - 1));
+            Json::Value streamVideos(Json::arrayValue);
+            for (const auto &seg : s->segments) {
+                Json::Value segNode(Json::objectValue);
+                segNode["file"] = seg.file;
+                segNode["duration"] = seg.duration;
+                segNode["frames"] = (Json::Value::Int64)seg.frames;
+                streamVideos.append(segNode);
             }
-            aud["duration"] = duration;
-            videosArr.append(aud);
+            streamNode["videos"] = streamVideos;
+            streamsArr.append(streamNode);
         }
-
-        indexRoot["videos"] = videosArr;
+        indexRoot["streams"] = streamsArr;
 
         if (!m_data->session_bag_path.empty()) {
             std::string bag_name = m_data->session_bag_path.substr(
-                m_data->session_bag_path.find_last_of("/\\\\") + 1);
+                m_data->session_bag_path.find_last_of("/\\") + 1);
             indexRoot["rosbags"] = bag_name;
         }
 
@@ -527,6 +457,15 @@ MainWindow::StreamWidgets MainWindow::create_stream_widget(VideoStream *s) {
     sw.record_check->set_active(true);
     header_hbox->pack_start(*sw.record_check, Gtk::PACK_SHRINK);
     s->record_checkbox = (GtkWidget *)sw.record_check->gobj();
+
+    Gtk::Button *retry_button = Gtk::manage(new Gtk::Button("Retry"));
+    retry_button->set_tooltip_text("Recreate the stream pipeline after a disconnect");
+    retry_button->set_sensitive(false);
+    retry_button->signal_clicked().connect([s]() {
+        s->restart();
+    });
+    header_hbox->pack_start(*retry_button, Gtk::PACK_SHRINK);
+    s->retry_button = (GtkWidget *)retry_button->gobj();
 
     // Preview
     Gtk::Frame *frame = Gtk::manage(new Gtk::Frame());
@@ -897,18 +836,30 @@ bool MainWindow::on_ui_update() {
                                       "</b></span>")
                                          .c_str());
             }
+            if (s->retry_button) {
+                gtk_widget_set_sensitive(s->retry_button, s->auto_retry_in_progress ? FALSE : TRUE);
+            }
             if (s->preview_stack) {
                 gtk_stack_set_visible_child_name(GTK_STACK(s->preview_stack),
                                                  "error");
             }
-            snprintf(buf, sizeof(buf), "<span foreground='red'><b>ERROR: %s</b></span>", s->error_message.c_str());
-            gtk_label_set_markup(GTK_LABEL(s->stats_label), buf);
+            if (s->auto_retry_in_progress) {
+                gtk_label_set_markup(
+                    GTK_LABEL(s->stats_label),
+                    "<span foreground='orange'><b>Retrying once...</b></span>");
+            } else {
+                snprintf(buf, sizeof(buf), "<span foreground='red'><b>ERROR: %s</b></span>", s->error_message.c_str());
+                gtk_label_set_markup(GTK_LABEL(s->stats_label), buf);
+            }
             continue;
         }
 
         if (s->stream_name_label) {
             gtk_label_set_markup(GTK_LABEL(s->stream_name_label),
                                  ("<b>" + s->name + "</b>").c_str());
+        }
+        if (s->retry_button) {
+            gtk_widget_set_sensitive(s->retry_button, FALSE);
         }
         if (s->preview_stack) {
             gtk_stack_set_visible_child_name(GTK_STACK(s->preview_stack),

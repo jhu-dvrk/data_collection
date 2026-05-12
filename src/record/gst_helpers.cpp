@@ -132,6 +132,7 @@ double get_audio_level_max(const GValue* gv) {
 GstPadProbeReturn source_probe_cb(GstPad *pad, GstPadProbeInfo *info, gpointer user_data) {
     VideoStream *s = (VideoStream *)user_data;
     if (info->type & GST_PAD_PROBE_TYPE_BUFFER) {
+        s->auto_retry_attempted = false;
         long long now = g_get_monotonic_time();
         if (s->last_src_ts == 0) s->last_src_ts = now;
         s->src_frame_counter++;
@@ -317,10 +318,16 @@ gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data) {
 
         if (failed_vs) {
             std::cerr << "Setting has_error for stream: " << failed_vs->name << std::endl;
+            bool should_auto_retry = false;
             {
                 std::lock_guard<std::mutex> lock(ad->data_mutex);
                 failed_vs->has_error = true;
                 failed_vs->error_message = err->message;
+                if (!failed_vs->auto_retry_attempted) {
+                    failed_vs->auto_retry_attempted = true;
+                    failed_vs->auto_retry_in_progress = true;
+                    should_auto_retry = true;
+                }
             }
 
             // Stop recording if active
@@ -332,6 +339,12 @@ gboolean bus_call(GstBus *bus, GstMessage *msg, gpointer user_data) {
                         MainWindow *mw = static_cast<MainWindow*>(Glib::wrap(ad->window));
                         mw->trigger_stop_recording();
                     }
+                });
+            }
+
+            if (should_auto_retry) {
+                Glib::signal_idle().connect_once([failed_vs]() {
+                    failed_vs->restart();
                 });
             }
         }

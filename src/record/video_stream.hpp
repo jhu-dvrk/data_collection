@@ -17,11 +17,19 @@ struct AppData; // Forward declaration
 
 class VideoStream {
 public:
+    struct SegmentSummary {
+        std::string file;
+        std::string sidecar;
+        double duration = 0.0;
+        long long frames = 0;
+    };
+
     VideoStream();
     ~VideoStream();
 
     // -- Lifecycle --
     bool create(AppData* ad, const dc::VideoConfig* config);
+    bool restart();
     void set_recording(bool active);
     void stop_and_save(const std::vector<std::string>& config_files);
     void shutdown();  // Properly tear down pipeline before destruction
@@ -29,7 +37,7 @@ public:
     // -- Public Members for UI access --
     std::string name;
     GstElement *pipeline, *valve, *rec_overlay;
-    GtkWidget *preview_widget, *record_checkbox, *stats_label;
+    GtkWidget *preview_widget, *record_checkbox, *retry_button, *stats_label;
     GtkWidget *stream_name_label, *preview_stack;
     std::string output_video, output_json;
     std::string pipeline_desc;
@@ -59,10 +67,22 @@ public:
     std::string side_by_side;
 
     bool has_error;
+    bool auto_retry_attempted;
+    bool auto_retry_in_progress;
     std::string error_message;
+    std::vector<SegmentSummary> segments;
 
 private:
     AppData* m_ad;
+    dc::VideoConfig m_config;
+    bool m_has_config;
+    int m_error_segment_index;
+    std::string m_output_stem;
+
+    void update_output_paths();
+    void reset_segment_counters();
+    void update_segment_summary();
+    double compute_segment_duration_seconds() const;
 };
 
 #endif // VIDEO_STREAM_HPP

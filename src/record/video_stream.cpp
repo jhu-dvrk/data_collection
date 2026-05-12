@@ -5,20 +5,32 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <iomanip>
+#include <sstream>
 #include <gst/video/video.h>
 #include <pwd.h>
 #include <unistd.h>
 
 extern int app_max_threads;
 
-VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), stats_label(NULL), stream_name_label(NULL), preview_stack(NULL),
+namespace {
+std::string base_name(const std::string &path) {
+    const std::string::size_type pos = path.find_last_of("/\\");
+    if (pos == std::string::npos) {
+        return path;
+    }
+    return path.substr(pos + 1);
+}
+}
+
+VideoStream::VideoStream() : pipeline(NULL), valve(NULL), rec_overlay(NULL), preview_widget(NULL), record_checkbox(NULL), retry_button(NULL), stats_label(NULL), stream_name_label(NULL), preview_stack(NULL),
                 is_recording(false), record_enabled(true), frames_recorded(0), frames_dropped(0), last_run_frames_recorded(0), last_run_stage_name(""), current_fps(0.0), estimated_latency(0.0),
                 cpu_ts_from_unixfd_count(0), cpu_ts_at_reception_count(0),
                 width(0), height(0), src_fps(0.0), last_src_ts(0), src_frame_counter(0),
                 rec_width(0), rec_height(0), rec_fps_requested(0.0),
                 total_offset_ns(0), last_raw_buffer_ts(-1), last_duration(0),
                 last_fps_ts(0), fps_frame_counter(0),
-                has_error(false), m_ad(NULL) {}
+                has_error(false), auto_retry_attempted(false), auto_retry_in_progress(false), m_ad(NULL), m_has_config(false), m_error_segment_index(0) {}
 
 VideoStream::~VideoStream() {
     // Pipeline should already be shut down via shutdown()
@@ -40,18 +52,46 @@ void VideoStream::shutdown() {
     if (valve) g_object_set(valve, "drop", FALSE, NULL);
 
     shutdown_pipeline(pipeline);
+
+    if (pipeline) {
+        gst_object_unref(pipeline);
+        pipeline = NULL;
+    }
+    if (valve) {
+        gst_object_unref(valve);
+        valve = NULL;
+    }
 }
 
 bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     this->m_ad = ad;
+    const bool first_create = !this->m_has_config;
+    if (v) {
+        this->m_config = *v;
+        this->m_has_config = true;
+    }
+    this->preview_widget = NULL;
     this->name = v->name;
     this->record_enabled = v->record;
     this->side_by_side = v->side_by_side;
     this->estimated_latency = v->estimated_latency;
+    this->has_error = false;
+    this->auto_retry_in_progress = false;
+    this->error_message.clear();
 
     this->rec_width = v->encoding.width;
     this->rec_height = v->encoding.height;
     this->rec_fps_requested = (double)v->encoding.frame_rate;
+
+    if (first_create) {
+        std::string sn = v->name;
+        for (char &c : sn) if (c == ' ') c = '_';
+        this->m_output_stem = ad->session_dir + "/" + sn;
+        this->m_error_segment_index = 0;
+        this->segments.clear();
+    }
+
+    this->update_output_paths();
 
     // Recording and encoding caps
     // Use an extra videoconvert to ensure we can reach the desired format/size
@@ -182,9 +222,7 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
         gst_object_unref(sink);
     }
 
-    // Set output paths from session data
-    this->output_video = ad->session_dir + "/" + sn + ".mp4";
-    this->output_json  = ad->session_dir + "/" + sn + ".json";
+    // Set output path for current segment
     GstElement *fsink = gst_bin_get_by_name(GST_BIN(this->pipeline), "__rec_filesink__");
     if (fsink) {
         g_object_set(fsink, "location", this->output_video.c_str(), NULL);
@@ -203,6 +241,59 @@ bool VideoStream::create(AppData* ad, const dc::VideoConfig* v) {
     return true;
 }
 
+bool VideoStream::restart() {
+    if (!m_has_config || !m_ad) {
+        return false;
+    }
+
+    const bool split_segment = this->has_error;
+    if (split_segment) {
+        this->stop_and_save(this->m_ad->config_files);
+        this->reset_segment_counters();
+        this->m_error_segment_index++;
+    }
+
+    GtkWidget *old_preview_widget = this->preview_widget;
+    GtkWidget *stack_widget = this->preview_stack;
+
+    if (stack_widget && old_preview_widget &&
+        gtk_widget_get_parent(old_preview_widget) != NULL) {
+        gtk_container_remove(GTK_CONTAINER(stack_widget), old_preview_widget);
+    }
+
+    this->shutdown();
+
+    if (!this->create(m_ad, &m_config)) {
+        this->has_error = true;
+        this->auto_retry_in_progress = false;
+        this->error_message = "Failed to recreate pipeline";
+        return false;
+    }
+
+    if (stack_widget && old_preview_widget && this->preview_widget &&
+        old_preview_widget != this->preview_widget) {
+        if (gtk_widget_get_parent(old_preview_widget) != NULL) {
+            gtk_container_remove(GTK_CONTAINER(stack_widget), old_preview_widget);
+        }
+        gtk_stack_add_named(GTK_STACK(stack_widget), this->preview_widget, "preview");
+        gtk_widget_show_all(this->preview_widget);
+        gtk_stack_set_visible_child_name(GTK_STACK(stack_widget), "preview");
+    }
+
+    if (this->m_ad->global_recording && this->record_checkbox) {
+        bool stream_rec = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(this->record_checkbox));
+        this->set_recording(stream_rec);
+    }
+
+    if (this->pipeline) {
+        gst_element_set_state(this->pipeline, GST_STATE_PLAYING);
+    }
+
+    this->auto_retry_in_progress = false;
+
+    return true;
+}
+
 void VideoStream::set_recording(bool active) {
     this->is_recording = active;
     if (this->valve) g_object_set(this->valve, "drop", !active, NULL);
@@ -216,7 +307,7 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
     this->set_recording(false);
 
 
-    if (this->record_enabled && !this->output_json.empty()) {
+    if (this->record_enabled && !this->output_json.empty() && !this->frames.empty()) {
         Json::Value root;
         root["type"] = "dc::sidecar@1.0.0";
         root["stream_name"] = this->name;
@@ -247,17 +338,82 @@ void VideoStream::stop_and_save(const std::vector<std::string>& config_files) {
         }
         root["frames"] = frame_list;
 
-        Json::Value configs = Json::arrayValue;
+        Json::Value configFiles(Json::arrayValue);
         for (const auto& cf : config_files) {
-            std::ifstream ifs(cf);
-            if (ifs.is_open()) {
-                std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-                configs.append(content);
-            }
+            configFiles.append(cf);
         }
-        root["configs"] = configs;
+        root["config_files"] = configFiles;
 
         std::ofstream ofs(this->output_json);
         ofs << root.toStyledString();
+
+        this->update_segment_summary();
     }
+}
+
+void VideoStream::update_output_paths() {
+    std::ostringstream suffix;
+    if (this->m_error_segment_index > 0) {
+        suffix << "_" << std::setw(3) << std::setfill('0') << this->m_error_segment_index;
+    }
+
+    this->output_video = this->m_output_stem + suffix.str() + ".mp4";
+    this->output_json = this->m_output_stem + suffix.str() + ".json";
+}
+
+void VideoStream::reset_segment_counters() {
+    this->frames.clear();
+    this->frames_recorded = 0;
+    this->frames_dropped = 0;
+    this->current_fps = 0.0;
+    this->cpu_ts_from_unixfd_count = 0;
+    this->cpu_ts_at_reception_count = 0;
+    this->last_raw_buffer_ts = -1;
+    this->last_duration = 0;
+    this->total_offset_ns = 0;
+    this->last_fps_ts = 0;
+    this->fps_frame_counter = 0;
+}
+
+double VideoStream::compute_segment_duration_seconds() const {
+    if (this->frames.size() < 2) {
+        return 0.0;
+    }
+
+    long long accum_ns = 0;
+    for (size_t i = 0; i + 1 < this->frames.size(); ++i) {
+        const long long diff = this->frames[i + 1].cpu_ts - this->frames[i].cpu_ts;
+        if (diff > 0 && diff < 500 * 1000000LL) {
+            accum_ns += diff;
+        }
+    }
+
+    if (accum_ns > 0) {
+        return static_cast<double>(accum_ns) / 1e9;
+    }
+
+    if (this->src_fps > 0.1) {
+        return static_cast<double>(this->frames.size()) / this->src_fps;
+    }
+
+    return 0.0;
+}
+
+void VideoStream::update_segment_summary() {
+    const std::string video_name = base_name(this->output_video);
+    const std::string sidecar_name = base_name(this->output_json);
+
+    SegmentSummary summary;
+    summary.file = video_name;
+    summary.sidecar = sidecar_name;
+    summary.duration = this->compute_segment_duration_seconds();
+    summary.frames = static_cast<long long>(this->frames.size());
+
+    for (auto &existing : this->segments) {
+        if (existing.file == summary.file) {
+            existing = summary;
+            return;
+        }
+    }
+    this->segments.push_back(summary);
 }
